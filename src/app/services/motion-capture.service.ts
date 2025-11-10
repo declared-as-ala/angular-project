@@ -40,6 +40,8 @@ export class MotionCaptureService {
   // Smooth eye blink values to prevent glitches
   private previousLeftBlink = 0;
   private previousRightBlink = 0;
+  // Smooth mouth opening values to prevent glitches
+  private previousMouthOpen = 0;
   private animationClock: any = null;
   private currentAnimation: any = null;
   private availableAnimations: any[] = [];
@@ -423,6 +425,8 @@ export class MotionCaptureService {
     // Reset eye blink smoothing values
     this.previousLeftBlink = 0;
     this.previousRightBlink = 0;
+    // Reset mouth opening smoothing value
+    this.previousMouthOpen = 0;
 
     // Scale and position model
     const box = new THREE.Box3().setFromObject(model);
@@ -1064,35 +1068,55 @@ export class MotionCaptureService {
       console.log('Found morph targets:', foundMorphs.slice(0, 20)); // Log first 20
     }
     
-    // Apply mouth opening - use multiple mouth shape properties
+    // Apply mouth opening - comprehensive solution with smoothing
     if (riggedFace.mouth) {
-      // Calculate mouth opening from multiple sources
-      let mouthOpen = 0;
+      // Based on research and SysMocap: Kalidokit provides mouth.y and mouth.shape
+      // SysMocap divides by 0.8 (amplifies by 1.25x) and uses lerp for smoothing
+      let targetMouthOpen = 0;
       
-      // Primary: mouth.y (vertical opening)
+      // Primary: mouth.y (vertical opening) - most reliable for jaw opening
+      // Kalidokit mouth.y: negative values indicate opening
       if (riggedFace.mouth.y !== undefined) {
-        mouthOpen = Math.max(mouthOpen, Math.abs(riggedFace.mouth.y) * 3);
+        // Use absolute value and amplify significantly for full opening
+        // Higher amplification ensures mouth opens fully
+        const mouthYValue = Math.abs(riggedFace.mouth.y);
+        targetMouthOpen = Math.max(targetMouthOpen, mouthYValue * 4.5); // Increased from 3 to 4.5
       }
       
-      // Secondary: mouth shape properties (I, A, E, O, U)
+      // Secondary: mouth.mouthOpen property (if available)
+      if (riggedFace.mouth.mouthOpen !== undefined) {
+        targetMouthOpen = Math.max(targetMouthOpen, riggedFace.mouth.mouthOpen * 2.0);
+      }
+      
+      // Tertiary: mouth shape properties (I, A, E, O, U) for different mouth shapes
+      // These are useful for vowel sounds and expressions
       if (riggedFace.mouth.shape) {
         const shapeValues = [
-          riggedFace.mouth.shape.I || 0,
-          riggedFace.mouth.shape.A || 0,
-          riggedFace.mouth.shape.E || 0,
-          riggedFace.mouth.shape.O || 0,
-          riggedFace.mouth.shape.U || 0
+          riggedFace.mouth.shape.I || 0,  // "ih" sound
+          riggedFace.mouth.shape.A || 0,  // "ah" sound (wide open)
+          riggedFace.mouth.shape.E || 0,  // "eh" sound
+          riggedFace.mouth.shape.O || 0,  // "oh" sound (round open)
+          riggedFace.mouth.shape.U || 0   // "oo" sound
         ];
         const maxShape = Math.max(...shapeValues);
-        mouthOpen = Math.max(mouthOpen, maxShape * 1.5);
+        // Amplify shape values more for better visibility
+        targetMouthOpen = Math.max(targetMouthOpen, maxShape * 2.5); // Increased from 1.5 to 2.5
       }
       
-      mouthOpen = Math.max(0, Math.min(1, mouthOpen));
+      // Clamp to valid range
+      targetMouthOpen = Math.max(0, Math.min(1, targetMouthOpen));
       
-      // Apply to all possible mouth morph targets
+      // Smooth interpolation to prevent glitches (similar to eye blinking)
+      // Use lerp factor 0.6 for responsive but smooth mouth movement
+      const smoothedMouthOpen = this.previousMouthOpen + (targetMouthOpen - this.previousMouthOpen) * 0.6;
+      this.previousMouthOpen = smoothedMouthOpen;
+      
+      // Apply to all possible mouth morph targets with extensive name variations
       const mouthMorphNames = [
         'jawOpen', 'mouthOpen', 'Mouth_Open', 'jawOpenY', 
-        'jawOpenX', 'Jaw_Open', 'mouthOpenY', 'MouthOpen'
+        'jawOpenX', 'Jaw_Open', 'mouthOpenY', 'MouthOpen',
+        'JawOpen', 'jaw_open', 'mouth_open', 'MouthOpenY',
+        'jawOpenZ', 'JawOpenY', 'Mouth_Open_Y', 'jawOpenVertical'
       ];
       
       if (this.morphTargetCache) {
@@ -1102,7 +1126,8 @@ export class MotionCaptureService {
           mouthMorphNames.forEach(morphName => {
             const index = dictionary[morphName];
             if (index !== undefined && child.morphTargetInfluences) {
-              child.morphTargetInfluences[index] = mouthOpen;
+              // Apply smoothed value to morph target
+              child.morphTargetInfluences[index] = smoothedMouthOpen;
             }
           });
         });
@@ -1137,7 +1162,7 @@ export class MotionCaptureService {
         if (rawValue > 0.2) {
           // Use exponential curve for aggressive closing: e^(x*2) - 1
           // This makes small blinks trigger strong closure
-          amplified = Math.min(1.3, 0.5 + (rawValue * 3.5)); // Range: 0.5 to 1.3
+          amplified = Math.min(1.3, 1 + (rawValue * 3.5)); // Range: 0.5 to 1.3
         }
         
         // Apply exponential curve for more aggressive response
