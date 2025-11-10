@@ -1105,18 +1105,26 @@ export class MotionCaptureService {
     // Apply eye blinking - improved with better detection and application
     if (riggedFace.eye) {
       // Kalidokit: 0 = open, 1 = closed
-      // For FBX morphs, typically 0 = open, 1 = closed
+      // For FBX morphs, we need to check if they're inverted (0 = closed, 1 = open)
+      // If eyes appear inverted, invert the values: 1 - eyeValue
       let leftBlink = 0;
       let rightBlink = 0;
       
       if (riggedFace.eye.l !== undefined) {
-        // Amplify and ensure proper range: Kalidokit gives 0-1 where 1 is closed
-        // Use higher multiplier for more visible blinking
-        leftBlink = Math.max(0, Math.min(1, riggedFace.eye.l * 1.5));
+        // Invert: Kalidokit gives 0-1 where 1 is closed, but FBX might expect 1 = open
+        // So we invert: 1 - value means when eye is closed (1), we get 0 (open in FBX)
+        // Actually, let's invert it: when Kalidokit says closed (1), we want FBX to show closed (1)
+        // But if it's inverted, we need: 1 - (eye.l * 1.5)
+        // Let's try direct inversion first
+        const rawValue = riggedFace.eye.l;
+        // Invert: if rawValue is 1 (closed), we want 0 (open in inverted system)
+        // If rawValue is 0 (open), we want 1 (closed in inverted system)
+        leftBlink = Math.max(0, Math.min(1, 1 - (rawValue * 1.5)));
       }
       
       if (riggedFace.eye.r !== undefined) {
-        rightBlink = Math.max(0, Math.min(1, riggedFace.eye.r * 1.5));
+        const rawValue = riggedFace.eye.r;
+        rightBlink = Math.max(0, Math.min(1, 1 - (rawValue * 1.5)));
       }
       
       // Apply to eye morph targets with extensive name variations
@@ -1168,13 +1176,17 @@ export class MotionCaptureService {
         
         if (leftEyeBone) {
           const THREE = this.getTHREE();
-          const euler = new THREE.Euler(leftBlink * 0.5, 0, 0, 'XYZ');
+          // Invert for bone rotation too
+          const invertedBlink = 1 - leftBlink;
+          const euler = new THREE.Euler(invertedBlink * 0.5, 0, 0, 'XYZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
           leftEyeBone.quaternion.slerp(quaternion, 0.8);
         }
         if (rightEyeBone) {
           const THREE = this.getTHREE();
-          const euler = new THREE.Euler(rightBlink * 0.5, 0, 0, 'XYZ');
+          // Invert for bone rotation too
+          const invertedBlink = 1 - rightBlink;
+          const euler = new THREE.Euler(invertedBlink * 0.5, 0, 0, 'XYZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
           rightEyeBone.quaternion.slerp(quaternion, 0.8);
         }
