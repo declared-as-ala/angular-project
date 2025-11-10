@@ -1117,28 +1117,45 @@ export class MotionCaptureService {
       
       if (riggedFace.eye.l !== undefined) {
         // Kalidokit: 0 = open, 1 = closed
-        // User reports: eyes start closed, open when user closes eyes
-        // This means the morph target is INVERTED:
-        //   When user eyes open (Kalidokit = 0) → Avatar should be open (morph = 0) but shows closed (morph = 1)
-        //   When user eyes closed (Kalidokit = 1) → Avatar should be closed (morph = 1) but shows open (morph = 0)
-        // Solution: INVERT the value: 1 - rawValue
+        // Research shows: Some morph targets need values > 1.0 (like 1.22) for full closure
+        // SysMocap divides by 0.8 which amplifies (multiplies by 1.25)
+        // Solution: Use aggressive amplification and allow values to exceed 1.0
         const rawValue = riggedFace.eye.l; // 0-1 where 1 is closed
-        // Use much higher amplification to ensure full closure
-        // Also add a threshold to ensure even small blinks trigger full closure
-        const amplified = Math.max(0, Math.min(1, rawValue * 2.5)); // Increased from 1.5 to 2.5
-        // Apply curve to make it more aggressive - ensure full closure
-        const curved = Math.pow(amplified, 0.7); // Power curve for more aggressive closing
+        
+        // Use very high amplification (4x) to ensure we reach full closure
+        // Allow temporary values > 1.0 for stronger effect
+        let amplified = rawValue * 4.0;
+        
+        // Add threshold: if blink is detected (value > 0.2), force stronger closure
+        if (rawValue > 0.2) {
+          // Use exponential curve for aggressive closing: e^(x*2) - 1
+          // This makes small blinks trigger strong closure
+          amplified = Math.min(1.3, 0.5 + (rawValue * 3.5)); // Range: 0.5 to 1.3
+        }
+        
+        // Apply exponential curve for more aggressive response
+        // Use inverse exponential: 1 - e^(-x*3) for faster closing
+        const curved = 1 - Math.exp(-amplified * 3);
+        
         // Invert: when Kalidokit says 0 (open), send 1 to morph (which makes it open in inverted system)
         //         when Kalidokit says 1 (closed), send 0 to morph (which makes it closed in inverted system)
-        leftBlink = 1 - curved;
+        leftBlink = Math.max(0, Math.min(1, 1 - curved));
       }
       
       if (riggedFace.eye.r !== undefined) {
         const rawValue = riggedFace.eye.r;
-        // Same aggressive amplification and curve
-        const amplified = Math.max(0, Math.min(1, rawValue * 2.5)); // Increased from 1.5 to 2.5
-        const curved = Math.pow(amplified, 0.7); // Power curve for more aggressive closing
-        rightBlink = 1 - curved;
+        
+        // Same aggressive amplification
+        let amplified = rawValue * 4.0;
+        
+        // Add threshold for stronger closure
+        if (rawValue > 0.2) {
+          amplified = Math.min(1.3, 0.5 + (rawValue * 3.5));
+        }
+        
+        // Apply exponential curve
+        const curved = 1 - Math.exp(-amplified * 3);
+        rightBlink = Math.max(0, Math.min(1, 1 - curved));
       }
       
       // Apply to eye morph targets with extensive name variations
