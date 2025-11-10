@@ -720,8 +720,9 @@ export class MotionCaptureService {
         this.rigRotation("Neck", riggedFace.head, 0.7);
         
         // Always apply face morphs for mouth and eyes
+        // Pass raw face landmarks for direct mouth calculation
         if (this.currentModel) {
-          this.applyFaceMorphs(riggedFace);
+          this.applyFaceMorphs(riggedFace, faceLandmarks);
         }
       }
     }
@@ -1049,7 +1050,7 @@ export class MotionCaptureService {
     });
   }
 
-  private applyFaceMorphs(riggedFace: any): void {
+  private applyFaceMorphs(riggedFace: any, faceLandmarks?: any): void {
     if (!this.currentModel || !riggedFace) return;
     
     // Cache morph target dictionaries to avoid repeated traversals
@@ -1068,47 +1069,76 @@ export class MotionCaptureService {
       console.log('Found morph targets:', foundMorphs.slice(0, 20)); // Log first 20
     }
     
-    // Apply mouth opening - comprehensive solution with smoothing
+    // Apply mouth opening - ALTERNATIVE APPROACH using direct MediaPipe landmarks
     if (riggedFace.mouth) {
-      // Based on research and SysMocap: Kalidokit provides mouth.y and mouth.shape
-      // SysMocap divides by 0.8 (amplifies by 1.25x) and uses lerp for smoothing
       let targetMouthOpen = 0;
       
-      // Primary: mouth.y (vertical opening) - most reliable for jaw opening
-      // Kalidokit mouth.y: negative values indicate opening
+      // APPROACH 1: Direct MediaPipe landmark calculation (most reliable)
+      // MediaPipe face landmarks: upper lip ~13, lower lip ~14, mouth corners ~61, 291
+      if (faceLandmarks && faceLandmarks.length >= 478) {
+        // Key mouth landmarks in MediaPipe Face Mesh (468 points)
+        // Upper lip center: ~13, Lower lip center: ~14
+        // Alternative: use mouth opening landmarks
+        const upperLip = faceLandmarks[13]; // Upper lip center
+        const lowerLip = faceLandmarks[14]; // Lower lip center
+        
+        if (upperLip && lowerLip) {
+          // Calculate vertical distance between upper and lower lip
+          const mouthDistance = Math.hypot(
+            lowerLip.x - upperLip.x,
+            lowerLip.y - upperLip.y,
+            (lowerLip.z || 0) - (upperLip.z || 0)
+          );
+          
+          // Normalize: typical closed mouth distance ~0.02-0.03, open ~0.08-0.12
+          // Use exponential mapping for better sensitivity
+          const normalizedDistance = Math.min(1, Math.max(0, (mouthDistance - 0.02) * 15));
+          targetMouthOpen = Math.max(targetMouthOpen, normalizedDistance);
+        }
+      }
+      
+      // APPROACH 2: Kalidokit mouth.y (try both positive and negative)
       if (riggedFace.mouth.y !== undefined) {
-        // Use absolute value and amplify significantly for full opening
-        // Higher amplification ensures mouth opens fully
-        const mouthYValue = Math.abs(riggedFace.mouth.y);
-        targetMouthOpen = Math.max(targetMouthOpen, mouthYValue * 4.5); // Increased from 3 to 4.5
+        // Try both directions - might be inverted
+        const mouthYPositive = Math.max(0, riggedFace.mouth.y) * 8.0;
+        const mouthYNegative = Math.max(0, -riggedFace.mouth.y) * 8.0;
+        targetMouthOpen = Math.max(targetMouthOpen, mouthYPositive, mouthYNegative);
       }
       
-      // Secondary: mouth.mouthOpen property (if available)
+      // APPROACH 3: mouth.mouthOpen property (if available)
       if (riggedFace.mouth.mouthOpen !== undefined) {
-        targetMouthOpen = Math.max(targetMouthOpen, riggedFace.mouth.mouthOpen * 2.0);
+        targetMouthOpen = Math.max(targetMouthOpen, riggedFace.mouth.mouthOpen * 3.0);
       }
       
-      // Tertiary: mouth shape properties (I, A, E, O, U) for different mouth shapes
-      // These are useful for vowel sounds and expressions
+      // APPROACH 4: mouth shape properties (I, A, E, O, U) - prioritize A and O (most open)
       if (riggedFace.mouth.shape) {
-        const shapeValues = [
-          riggedFace.mouth.shape.I || 0,  // "ih" sound
-          riggedFace.mouth.shape.A || 0,  // "ah" sound (wide open)
-          riggedFace.mouth.shape.E || 0,  // "eh" sound
-          riggedFace.mouth.shape.O || 0,  // "oh" sound (round open)
-          riggedFace.mouth.shape.U || 0   // "oo" sound
-        ];
-        const maxShape = Math.max(...shapeValues);
-        // Amplify shape values more for better visibility
-        targetMouthOpen = Math.max(targetMouthOpen, maxShape * 2.5); // Increased from 1.5 to 2.5
+        const shapeA = (riggedFace.mouth.shape.A || 0) * 4.0; // "ah" sound (wide open)
+        const shapeO = (riggedFace.mouth.shape.O || 0) * 4.0; // "oh" sound (round open)
+        const shapeI = (riggedFace.mouth.shape.I || 0) * 2.0; // "ih" sound
+        const shapeE = (riggedFace.mouth.shape.E || 0) * 2.0; // "eh" sound
+        const shapeU = (riggedFace.mouth.shape.U || 0) * 2.0; // "oo" sound
+        
+        targetMouthOpen = Math.max(targetMouthOpen, shapeA, shapeO, shapeI, shapeE, shapeU);
+      }
+      
+      // Debug logging (only log occasionally to avoid spam)
+      if (Math.random() < 0.01) { // Log 1% of frames
+        console.log('Mouth tracking debug:', {
+          mouthY: riggedFace.mouth.y,
+          mouthOpen: riggedFace.mouth.mouthOpen,
+          shapeA: riggedFace.mouth.shape?.A,
+          shapeO: riggedFace.mouth.shape?.O,
+          targetMouthOpen: targetMouthOpen,
+          hasLandmarks: !!faceLandmarks
+        });
       }
       
       // Clamp to valid range
       targetMouthOpen = Math.max(0, Math.min(1, targetMouthOpen));
       
-      // Smooth interpolation to prevent glitches (similar to eye blinking)
-      // Use lerp factor 0.6 for responsive but smooth mouth movement
-      const smoothedMouthOpen = this.previousMouthOpen + (targetMouthOpen - this.previousMouthOpen) * 0.6;
+      // Smooth interpolation to prevent glitches
+      // Use higher lerp factor (0.7) for more responsive mouth movement
+      const smoothedMouthOpen = this.previousMouthOpen + (targetMouthOpen - this.previousMouthOpen) * 0.7;
       this.previousMouthOpen = smoothedMouthOpen;
       
       // Apply to all possible mouth morph targets with extensive name variations
@@ -1116,8 +1146,11 @@ export class MotionCaptureService {
         'jawOpen', 'mouthOpen', 'Mouth_Open', 'jawOpenY', 
         'jawOpenX', 'Jaw_Open', 'mouthOpenY', 'MouthOpen',
         'JawOpen', 'jaw_open', 'mouth_open', 'MouthOpenY',
-        'jawOpenZ', 'JawOpenY', 'Mouth_Open_Y', 'jawOpenVertical'
+        'jawOpenZ', 'JawOpenY', 'Mouth_Open_Y', 'jawOpenVertical',
+        'jaw_open_y', 'Jaw_Open_Y', 'mouth_open_y'
       ];
+      
+      let appliedToMorphs = false;
       
       if (this.morphTargetCache) {
         this.morphTargetCache.forEach((dictionary: any, child: any) => {
@@ -1128,9 +1161,27 @@ export class MotionCaptureService {
             if (index !== undefined && child.morphTargetInfluences) {
               // Apply smoothed value to morph target
               child.morphTargetInfluences[index] = smoothedMouthOpen;
+              appliedToMorphs = true;
             }
           });
         });
+      }
+      
+      // FALLBACK: If no morph targets found, try jaw bone rotation
+      if (!appliedToMorphs && this.skeletonHelper && this.skeletonHelper.bones) {
+        // Try to find jaw bone
+        const jawBone = this.skeletonHelper.bones.find((b: any) => 
+          b.name && (b.name.includes('Jaw') || b.name.includes('jaw') || b.name.includes('mixamorigHead'))
+        );
+        
+        if (jawBone) {
+          const THREE = this.getTHREE();
+          // Rotate jaw down when mouth opens
+          const jawRotation = smoothedMouthOpen * 0.3; // Max 0.3 radians (~17 degrees)
+          const euler = new THREE.Euler(jawRotation, 0, 0, 'XYZ');
+          const quaternion = new THREE.Quaternion().setFromEuler(euler);
+          jawBone.quaternion.slerp(quaternion, 0.7);
+        }
       }
     }
     
