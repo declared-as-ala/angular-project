@@ -1166,14 +1166,21 @@ export class MotionCaptureService {
         'jawOpen', 'JawOpen', 'jaw_open', 'Jaw_Open', 'jawOpenY', 'JawOpenY',
         'mouthOpen', 'MouthOpen', 'Mouth_Open', 'mouthOpenY', 'MouthOpenY',
         'jawOpenX', 'jawOpenZ', 'Jaw_Open_Y', 'mouth_open', 'mouth_open_y',
-        'jawOpenVertical', 'JawOpenVertical', 'Mouth_Open_Y'
+        'jawOpenVertical', 'JawOpenVertical', 'Mouth_Open_Y',
+        // Additional variations
+        'jaw_open_y', 'Jaw_Open_Y', 'mouthOpenVertical', 'MouthOpenVertical',
+        'jawDrop', 'JawDrop', 'jaw_drop', 'Jaw_Drop'
       ];
       
       let jawOpenApplied = false;
+      let foundMorphTargets: string[] = [];
       
       if (this.morphTargetCache) {
         this.morphTargetCache.forEach((dictionary: any, child: any) => {
           if (!child || !child.morphTargetInfluences) return;
+          
+          // First, let's see what morph targets are actually available
+          const availableMorphs = Object.keys(dictionary);
           
           // Try all possible jawOpen morph target names
           for (const morphName of jawOpenMorphNames) {
@@ -1184,12 +1191,26 @@ export class MotionCaptureService {
               const amplified = Math.min(1, jawOpenScore * 3.0); // 3x amplification for better visibility
               child.morphTargetInfluences[index] = amplified;
               jawOpenApplied = true;
+              foundMorphTargets.push(morphName);
               
-              // Debug: Log when we successfully apply
-              if (Math.random() < 0.01 && amplified > 0.3) {
-                console.log(`Applied jawOpen to morph target "${morphName}" with value:`, amplified);
+              // Always log when applying (for debugging)
+              if (jawOpenScore > 0.3) {
+                console.log(`✅ Applied jawOpen to morph target "${morphName}" (index: ${index}) with value:`, amplified, 'from score:', jawOpenScore);
               }
               break; // Found and applied, no need to try other names
+            }
+          }
+          
+          // If we didn't find a match, log available morphs for debugging
+          if (!jawOpenApplied && jawOpenScore > 0.3 && Math.random() < 0.1) {
+            const mouthRelated = availableMorphs.filter(name => 
+              name.toLowerCase().includes('jaw') || 
+              name.toLowerCase().includes('mouth') ||
+              name.toLowerCase().includes('open')
+            );
+            if (mouthRelated.length > 0) {
+              console.warn('⚠️ jawOpen not found, but found these mouth-related morphs:', mouthRelated);
+              console.warn('Available morph targets:', availableMorphs.slice(0, 30));
             }
           }
           
@@ -1221,21 +1242,50 @@ export class MotionCaptureService {
       
       // If no morph targets found, try jaw bone rotation as fallback
       if (!jawOpenApplied && this.skeletonHelper && this.skeletonHelper.bones) {
-        const jawBone = this.skeletonHelper.bones.find((b: any) => 
-          b.name && (b.name.toLowerCase().includes('jaw') || b.name.toLowerCase().includes('chin'))
-        );
+        // Try multiple bone name variations
+        const jawBoneNames = ['jaw', 'Jaw', 'chin', 'Chin', 'head', 'Head', 'mixamorigHead'];
+        let jawBone: any = null;
+        
+        for (const boneName of jawBoneNames) {
+          jawBone = this.skeletonHelper.bones.find((b: any) => 
+            b.name && b.name.toLowerCase().includes(boneName.toLowerCase())
+          );
+          if (jawBone) break;
+        }
         
         if (jawBone) {
           const THREE = this.getTHREE();
-          const jawRotation = Math.min(0.5, jawOpenScore * 0.5); // Max 0.5 radians (~29 degrees)
+          // More aggressive rotation for better visibility
+          const jawRotation = Math.min(0.6, jawOpenScore * 0.6); // Max 0.6 radians (~34 degrees)
           const euler = new THREE.Euler(jawRotation, 0, 0, 'XYZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
-          jawBone.quaternion.slerp(quaternion, 0.8);
+          jawBone.quaternion.slerp(quaternion, 0.9); // Higher lerp for more responsive
           
-          if (Math.random() < 0.01 && jawOpenScore > 0.3) {
-            console.log('Applied jawOpen via bone rotation:', jawRotation);
+          if (jawOpenScore > 0.3) {
+            console.log(`✅ Applied jawOpen via bone rotation on "${jawBone.name}":`, jawRotation, 'radians from score:', jawOpenScore);
+          }
+          jawOpenApplied = true; // Mark as applied so we don't try fallback again
+        } else {
+          // Log available bones for debugging
+          if (jawOpenScore > 0.3 && Math.random() < 0.1) {
+            const boneNames = this.skeletonHelper.bones.map((b: any) => b.name).filter((n: string) => n);
+            const headRelated = boneNames.filter((name: string) => 
+              name.toLowerCase().includes('head') || 
+              name.toLowerCase().includes('jaw') ||
+              name.toLowerCase().includes('chin') ||
+              name.toLowerCase().includes('face')
+            );
+            console.warn('⚠️ No jaw bone found. Head-related bones:', headRelated);
+            console.warn('All bones:', boneNames.slice(0, 20));
           }
         }
+      }
+      
+      // Final check: if still not applied, log warning
+      if (!jawOpenApplied && jawOpenScore > 0.3 && Math.random() < 0.05) {
+        console.error('❌ jawOpen detected but NOT applied! Score:', jawOpenScore);
+        console.error('Morph target cache exists:', !!this.morphTargetCache);
+        console.error('Skeleton helper exists:', !!this.skeletonHelper);
       }
       
       // Update previous value for smoothing
