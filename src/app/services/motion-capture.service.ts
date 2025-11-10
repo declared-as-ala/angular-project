@@ -1111,20 +1111,20 @@ export class MotionCaptureService {
       let rightBlink = 0;
       
       if (riggedFace.eye.l !== undefined) {
-        // Invert: Kalidokit gives 0-1 where 1 is closed, but FBX might expect 1 = open
-        // So we invert: 1 - value means when eye is closed (1), we get 0 (open in FBX)
-        // Actually, let's invert it: when Kalidokit says closed (1), we want FBX to show closed (1)
-        // But if it's inverted, we need: 1 - (eye.l * 1.5)
-        // Let's try direct inversion first
+        // Kalidokit: 0 = open, 1 = closed
+        // FBX appears to be inverted: 0 = closed, 1 = open
+        // So we need to invert: when Kalidokit says 0 (open), FBX should be 1 (open)
+        // When Kalidokit says 1 (closed), FBX should be 0 (closed)
         const rawValue = riggedFace.eye.l;
-        // Invert: if rawValue is 1 (closed), we want 0 (open in inverted system)
-        // If rawValue is 0 (open), we want 1 (closed in inverted system)
-        leftBlink = Math.max(0, Math.min(1, 1 - (rawValue * 1.5)));
+        // First amplify, then invert
+        const amplified = Math.max(0, Math.min(1, rawValue * 1.5));
+        leftBlink = 1 - amplified;
       }
       
       if (riggedFace.eye.r !== undefined) {
         const rawValue = riggedFace.eye.r;
-        rightBlink = Math.max(0, Math.min(1, 1 - (rawValue * 1.5)));
+        const amplified = Math.max(0, Math.min(1, rawValue * 1.5));
+        rightBlink = 1 - amplified;
       }
       
       // Apply to eye morph targets with extensive name variations
