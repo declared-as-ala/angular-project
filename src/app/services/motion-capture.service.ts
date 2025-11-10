@@ -37,6 +37,9 @@ export class MotionCaptureService {
   private trackingTarget: 'face' | 'half' | 'full' = 'face';
   private currentMode: 'tracking' | 'animation' = 'tracking';
   private animationMixer: any = null;
+  // Smooth eye blink values to prevent glitches
+  private previousLeftBlink = 0;
+  private previousRightBlink = 0;
   private animationClock: any = null;
   private currentAnimation: any = null;
   private availableAnimations: any[] = [];
@@ -416,6 +419,10 @@ export class MotionCaptureService {
     
     // Clear morph target cache (will be rebuilt)
     this.morphTargetCache = null;
+    
+    // Reset eye blink smoothing values
+    this.previousLeftBlink = 0;
+    this.previousRightBlink = 0;
 
     // Scale and position model
     const box = new THREE.Box3().setFromObject(model);
@@ -1139,7 +1146,12 @@ export class MotionCaptureService {
         
         // Invert: when Kalidokit says 0 (open), send 1 to morph (which makes it open in inverted system)
         //         when Kalidokit says 1 (closed), send 0 to morph (which makes it closed in inverted system)
-        leftBlink = Math.max(0, Math.min(1, 1 - curved));
+        const targetBlink = Math.max(0, Math.min(1, 1 - curved));
+        
+        // Smooth interpolation to prevent glitches (lerp with factor 0.5 for smooth but responsive)
+        // Higher factor = more responsive but less smooth, lower = smoother but more lag
+        leftBlink = this.previousLeftBlink + (targetBlink - this.previousLeftBlink) * 0.5;
+        this.previousLeftBlink = leftBlink;
       }
       
       if (riggedFace.eye.r !== undefined) {
@@ -1155,7 +1167,11 @@ export class MotionCaptureService {
         
         // Apply exponential curve
         const curved = 1 - Math.exp(-amplified * 3);
-        rightBlink = Math.max(0, Math.min(1, 1 - curved));
+        const targetBlink = Math.max(0, Math.min(1, 1 - curved));
+        
+        // Smooth interpolation to prevent glitches
+        rightBlink = this.previousRightBlink + (targetBlink - this.previousRightBlink) * 0.5;
+        this.previousRightBlink = rightBlink;
       }
       
       // Apply to eye morph targets with extensive name variations
