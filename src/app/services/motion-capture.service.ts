@@ -861,7 +861,7 @@ export class MotionCaptureService {
         "XYZ"
       );
       const quaternion = new THREE.Quaternion().setFromEuler(euler);
-      handBone.quaternion.slerp(quaternion, 0.4); // Increased lerp for better responsiveness
+      handBone.quaternion.slerp(quaternion, 0.7); // Much higher lerp for immediate response
     }
 
     // Finger bone mapping
@@ -886,7 +886,7 @@ export class MotionCaptureService {
     const wrist = landmarks[0];
     if (!wrist) return;
 
-    // Calculate individual finger distances for better tracking
+    // Calculate individual finger distances using multiple landmark pairs for better accuracy
     const fingerDistances: any = {
       "Thumb": 0,
       "Index": 0,
@@ -895,49 +895,79 @@ export class MotionCaptureService {
       "Pinky": 0
     };
 
-    // Thumb: distance from tip (4) to base (2)
+    // Thumb: use multiple points for better tracking (tip 4, joint 3, base 2)
     if (landmarks[4] && landmarks[2]) {
-      fingerDistances.Thumb = Math.hypot(
+      const dist1 = Math.hypot(
         landmarks[4].x - landmarks[2].x,
         landmarks[4].y - landmarks[2].y,
         (landmarks[4].z || 0) - (landmarks[2].z || 0)
       );
+      const dist2 = landmarks[3] ? Math.hypot(
+        landmarks[4].x - landmarks[3].x,
+        landmarks[4].y - landmarks[3].y,
+        (landmarks[4].z || 0) - (landmarks[3].z || 0)
+      ) : dist1;
+      fingerDistances.Thumb = (dist1 + dist2) / 2;
     }
 
-    // Index: distance from tip (8) to base (5)
+    // Index: tip 8, joints 7, 6, base 5
     if (landmarks[8] && landmarks[5]) {
-      fingerDistances.Index = Math.hypot(
+      const dist1 = Math.hypot(
         landmarks[8].x - landmarks[5].x,
         landmarks[8].y - landmarks[5].y,
         (landmarks[8].z || 0) - (landmarks[5].z || 0)
       );
+      const dist2 = landmarks[6] ? Math.hypot(
+        landmarks[8].x - landmarks[6].x,
+        landmarks[8].y - landmarks[6].y,
+        (landmarks[8].z || 0) - (landmarks[6].z || 0)
+      ) : dist1;
+      fingerDistances.Index = (dist1 + dist2) / 2;
     }
 
-    // Middle: distance from tip (12) to base (9)
+    // Middle: tip 12, joints 11, 10, base 9
     if (landmarks[12] && landmarks[9]) {
-      fingerDistances.Middle = Math.hypot(
+      const dist1 = Math.hypot(
         landmarks[12].x - landmarks[9].x,
         landmarks[12].y - landmarks[9].y,
         (landmarks[12].z || 0) - (landmarks[9].z || 0)
       );
+      const dist2 = landmarks[10] ? Math.hypot(
+        landmarks[12].x - landmarks[10].x,
+        landmarks[12].y - landmarks[10].y,
+        (landmarks[12].z || 0) - (landmarks[10].z || 0)
+      ) : dist1;
+      fingerDistances.Middle = (dist1 + dist2) / 2;
     }
 
-    // Ring: distance from tip (16) to base (13)
+    // Ring: tip 16, joints 15, 14, base 13
     if (landmarks[16] && landmarks[13]) {
-      fingerDistances.Ring = Math.hypot(
+      const dist1 = Math.hypot(
         landmarks[16].x - landmarks[13].x,
         landmarks[16].y - landmarks[13].y,
         (landmarks[16].z || 0) - (landmarks[13].z || 0)
       );
+      const dist2 = landmarks[14] ? Math.hypot(
+        landmarks[16].x - landmarks[14].x,
+        landmarks[16].y - landmarks[14].y,
+        (landmarks[16].z || 0) - (landmarks[14].z || 0)
+      ) : dist1;
+      fingerDistances.Ring = (dist1 + dist2) / 2;
     }
 
-    // Pinky: distance from tip (20) to base (17)
+    // Pinky: tip 20, joints 19, 18, base 17
     if (landmarks[20] && landmarks[17]) {
-      fingerDistances.Pinky = Math.hypot(
+      const dist1 = Math.hypot(
         landmarks[20].x - landmarks[17].x,
         landmarks[20].y - landmarks[17].y,
         (landmarks[20].z || 0) - (landmarks[17].z || 0)
       );
+      const dist2 = landmarks[18] ? Math.hypot(
+        landmarks[20].x - landmarks[18].x,
+        landmarks[20].y - landmarks[18].y,
+        (landmarks[20].z || 0) - (landmarks[18].z || 0)
+      ) : dist1;
+      fingerDistances.Pinky = (dist1 + dist2) / 2;
     }
 
     // Calculate overall hand closing from all finger tips to wrist
@@ -961,10 +991,10 @@ export class MotionCaptureService {
     }
     
     // Improved hand closing calculation - more sensitive and responsive
-    const baseDistance = 0.12; // Adjusted base distance
-    const handCloseAmount = Math.max(0, Math.min(1, 1 - ((avgDistance - baseDistance) * 10)));
+    const baseDistance = 0.10; // Lower base distance for better sensitivity
+    const handCloseAmount = Math.max(0, Math.min(1, 1 - ((avgDistance - baseDistance) * 15))); // Higher multiplier
 
-    // Apply finger rotations with individual finger tracking
+    // Apply finger rotations with individual finger tracking - more direct and responsive
     const fingers = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
     fingers.forEach(fingerName => {
       const fingerData = riggedHand[side + fingerName];
@@ -972,35 +1002,36 @@ export class MotionCaptureService {
         const boneNames = fingerBones[side][fingerName];
         const fingerDistance = fingerDistances[fingerName] || 0;
         
-        // Calculate individual finger closing (0 = open, 1 = closed)
-        const fingerBaseDistance = 0.08; // Base distance for individual finger
-        const individualClose = Math.max(0, Math.min(1, 1 - ((fingerDistance - fingerBaseDistance) * 12)));
+        // Calculate individual finger closing (0 = open, 1 = closed) - more sensitive
+        const fingerBaseDistance = 0.06; // Lower base for better sensitivity
+        const individualClose = Math.max(0, Math.min(1, 1 - ((fingerDistance - fingerBaseDistance) * 18))); // Higher multiplier
         
-        // Combine overall hand closing with individual finger closing
-        const combinedClose = Math.max(handCloseAmount, individualClose * 0.8);
+        // Combine overall hand closing with individual finger closing - prioritize individual
+        const combinedClose = Math.max(handCloseAmount * 0.7, individualClose * 1.0); // Individual finger has priority
         
         boneNames.forEach((boneName: string, idx: number) => {
           const bone = this.skeletonHelper.bones.find((b: any) => b.name === boneName);
           if (bone && fingerData) {
-            // Improved closing with individual finger tracking
+            // Improved closing with individual finger tracking - more aggressive
             let closeFactor = 0;
             if (fingerName === "Thumb") {
-              // Thumb: different closing pattern
-              closeFactor = idx === 0 ? combinedClose * 0.3 : (idx === 1 ? combinedClose * 0.7 : combinedClose * 0.9);
+              // Thumb: different closing pattern - more responsive
+              closeFactor = idx === 0 ? combinedClose * 0.4 : (idx === 1 ? combinedClose * 0.8 : combinedClose * 1.1);
             } else {
-              // Other fingers: progressive closing from base to tip
-              closeFactor = idx === 0 ? combinedClose * 0.5 : (idx === 1 ? combinedClose * 1.3 : combinedClose * 1.8);
+              // Other fingers: progressive closing from base to tip - more aggressive
+              closeFactor = idx === 0 ? combinedClose * 0.6 : (idx === 1 ? combinedClose * 1.5 : combinedClose * 2.2);
             }
             
-            // Apply rotation from Kalidokit + closing factor
+            // Apply rotation from Kalidokit + closing factor - direct application
             const rot = {
-              x: (fingerData.x || 0) + closeFactor * 2.0,
+              x: (fingerData.x || 0) + closeFactor * 2.5, // Higher multiplier
               y: (fingerData.y || 0),
               z: (fingerData.z || 0)
             };
             const euler = new THREE.Euler(rot.x, rot.y, rot.z, "XYZ");
             const quaternion = new THREE.Quaternion().setFromEuler(euler);
-            bone.quaternion.slerp(quaternion, 0.6); // Higher lerp for more responsive tracking
+            // Much higher lerp for immediate, responsive tracking
+            bone.quaternion.slerp(quaternion, 0.85);
           }
         });
       }
@@ -1013,11 +1044,17 @@ export class MotionCaptureService {
     // Cache morph target dictionaries to avoid repeated traversals
     if (!this.morphTargetCache) {
       this.morphTargetCache = new Map();
+      let foundMorphs: string[] = [];
       this.currentModel.traverse((child: any) => {
         if (child && child.morphTargetInfluences && child.morphTargetDictionary) {
           this.morphTargetCache!.set(child, child.morphTargetDictionary);
+          // Collect all morph target names for debugging
+          Object.keys(child.morphTargetDictionary).forEach(name => {
+            if (!foundMorphs.includes(name)) foundMorphs.push(name);
+          });
         }
       });
+      console.log('Found morph targets:', foundMorphs.slice(0, 20)); // Log first 20
     }
     
     // Apply mouth opening - use multiple mouth shape properties
@@ -1065,61 +1102,82 @@ export class MotionCaptureService {
       }
     }
     
-    // Apply eye blinking - improved with stabilization
+    // Apply eye blinking - improved with better detection and application
     if (riggedFace.eye) {
-      // Kalidokit: 0 = open, 1 = closed (inverted from VRM)
+      // Kalidokit: 0 = open, 1 = closed
       // For FBX morphs, typically 0 = open, 1 = closed
       let leftBlink = 0;
       let rightBlink = 0;
       
       if (riggedFace.eye.l !== undefined) {
-        // Invert and amplify: Kalidokit gives 0-1 where 1 is closed
-        leftBlink = Math.max(0, Math.min(1, riggedFace.eye.l * 1.2));
+        // Amplify and ensure proper range: Kalidokit gives 0-1 where 1 is closed
+        // Use higher multiplier for more visible blinking
+        leftBlink = Math.max(0, Math.min(1, riggedFace.eye.l * 1.5));
       }
       
       if (riggedFace.eye.r !== undefined) {
-        rightBlink = Math.max(0, Math.min(1, riggedFace.eye.r * 1.2));
+        rightBlink = Math.max(0, Math.min(1, riggedFace.eye.r * 1.5));
       }
       
-      // Apply to eye morph targets
-      const eyeMorphNames = [
-        'eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft',
-        'eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight',
-        'eyeBlink', 'Eye_Blink', 'blink', 'Blink' // Combined blink
+      // Apply to eye morph targets with extensive name variations
+      const allEyeMorphNames = [
+        'eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft', 'EyeBlinkLeft',
+        'eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight', 'EyeBlinkRight',
+        'eyeBlink', 'Eye_Blink', 'blink', 'Blink', 'EyeBlink',
+        'LeftEyeBlink', 'RightEyeBlink', 'LEyeBlink', 'REyeBlink'
       ];
+      
+      let appliedToMorphs = false;
       
       if (this.morphTargetCache) {
         this.morphTargetCache.forEach((dictionary: any, child: any) => {
           if (!child || !child.morphTargetInfluences) return;
           
-          // Left eye
-          const leftEyeNames = ['eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft'];
-          leftEyeNames.forEach(morphName => {
+          // Try all possible eye morph names
+          allEyeMorphNames.forEach(morphName => {
             const index = dictionary[morphName];
             if (index !== undefined && child.morphTargetInfluences) {
-              child.morphTargetInfluences[index] = leftBlink;
-            }
-          });
-          
-          // Right eye
-          const rightEyeNames = ['eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight'];
-          rightEyeNames.forEach(morphName => {
-            const index = dictionary[morphName];
-            if (index !== undefined && child.morphTargetInfluences) {
-              child.morphTargetInfluences[index] = rightBlink;
-            }
-          });
-          
-          // Combined blink (use average)
-          const combinedBlinkNames = ['eyeBlink', 'Eye_Blink', 'blink', 'Blink'];
-          const avgBlink = (leftBlink + rightBlink) / 2;
-          combinedBlinkNames.forEach(morphName => {
-            const index = dictionary[morphName];
-            if (index !== undefined && child.morphTargetInfluences) {
-              child.morphTargetInfluences[index] = avgBlink;
+              // Determine if it's left, right, or combined
+              const lowerName = morphName.toLowerCase();
+              if (lowerName.includes('left') || lowerName === 'leyeblink') {
+                child.morphTargetInfluences[index] = leftBlink;
+                appliedToMorphs = true;
+              } else if (lowerName.includes('right') || lowerName === 'reyeblink') {
+                child.morphTargetInfluences[index] = rightBlink;
+                appliedToMorphs = true;
+              } else {
+                // Combined blink (use average)
+                const avgBlink = (leftBlink + rightBlink) / 2;
+                child.morphTargetInfluences[index] = avgBlink;
+                appliedToMorphs = true;
+              }
             }
           });
         });
+      }
+      
+      // Fallback: If no morph targets found, try to use bone rotation for eyes
+      if (!appliedToMorphs && this.skeletonHelper && this.skeletonHelper.bones) {
+        // Try to find eye bones (less common but possible)
+        const leftEyeBone = this.skeletonHelper.bones.find((b: any) => 
+          b.name && (b.name.includes('LeftEye') || b.name.includes('leftEye') || b.name.includes('Eye_L'))
+        );
+        const rightEyeBone = this.skeletonHelper.bones.find((b: any) => 
+          b.name && (b.name.includes('RightEye') || b.name.includes('rightEye') || b.name.includes('Eye_R'))
+        );
+        
+        if (leftEyeBone) {
+          const THREE = this.getTHREE();
+          const euler = new THREE.Euler(leftBlink * 0.5, 0, 0, 'XYZ');
+          const quaternion = new THREE.Quaternion().setFromEuler(euler);
+          leftEyeBone.quaternion.slerp(quaternion, 0.8);
+        }
+        if (rightEyeBone) {
+          const THREE = this.getTHREE();
+          const euler = new THREE.Euler(rightBlink * 0.5, 0, 0, 'XYZ');
+          const quaternion = new THREE.Quaternion().setFromEuler(euler);
+          rightEyeBone.quaternion.slerp(quaternion, 0.8);
+        }
       }
     }
   }
