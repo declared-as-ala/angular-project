@@ -1,7 +1,8 @@
 {
-  "buildCommand": "npm install && npm run build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist/fbx-motion-capture",
-  "framework": "angular",
+  "framework": null,
+  "installCommand": "npm install",
   "rewrites": [
     {
       "source": "/(.*)",
@@ -9,4 +10,3 @@
     }
   ]
 }
-
