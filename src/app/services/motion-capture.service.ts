@@ -783,14 +783,6 @@ export class MotionCaptureService {
       };
     }
 
-    if (!this.initRotation[name]) {
-      this.initRotation[name] = {
-        x: bone.rotation.x,
-        y: bone.rotation.y,
-        z: bone.rotation.z
-      };
-    }
-
     const x = rotation.x * dampener;
     const y = rotation.y * dampener;
     const z = rotation.z * dampener;
