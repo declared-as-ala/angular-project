@@ -28,6 +28,7 @@ export class MotionCaptureService {
   private skeletonHelper: any = null;
   private initRotation: any = {};
   private isTracking = false;
+  private morphTargetCache: Map<any, any> | null = null;
   private holistic: any = null;
   private videoElement: HTMLVideoElement | null = null;
   private canvasElement: HTMLCanvasElement | null = null;
@@ -412,6 +413,9 @@ export class MotionCaptureService {
 
     // Reset initial rotations
     this.initRotation = {};
+    
+    // Clear morph target cache (will be rebuilt)
+    this.morphTargetCache = null;
 
     // Scale and position model
     const box = new THREE.Box3().setFromObject(model);
@@ -704,8 +708,8 @@ export class MotionCaptureService {
         // Head rotation
         this.rigRotation("Neck", riggedFace.head, 0.7);
         
-        // Apply face morphs for mouth and eyes if available
-        if (this.currentModel && riggedFace.mouth) {
+        // Always apply face morphs for mouth and eyes
+        if (this.currentModel) {
           this.applyFaceMorphs(riggedFace);
         }
       }
@@ -842,7 +846,7 @@ export class MotionCaptureService {
   }
 
   private applyHandTracking(riggedHand: any, landmarks: any, side: string): void {
-    if (!riggedHand || !this.skeletonHelper) return;
+    if (!riggedHand || !this.skeletonHelper || !landmarks || landmarks.length < 21) return;
     const THREE = this.getTHREE();
 
     const handBoneName = side === "Left" ? "mixamorigLeftHand" : "mixamorigRightHand";
@@ -857,10 +861,10 @@ export class MotionCaptureService {
         "XYZ"
       );
       const quaternion = new THREE.Quaternion().setFromEuler(euler);
-      handBone.quaternion.slerp(quaternion, 0.3);
+      handBone.quaternion.slerp(quaternion, 0.4); // Increased lerp for better responsiveness
     }
 
-    // Finger tracking logic (simplified - full implementation from app.js)
+    // Finger bone mapping
     const fingerBones: any = {
       "Left": {
         "Thumb": ["mixamorigLeftHandThumb1", "mixamorigLeftHandThumb2", "mixamorigLeftHandThumb3"],
@@ -878,10 +882,66 @@ export class MotionCaptureService {
       }
     };
 
+    // MediaPipe hand landmarks: 0=wrist, 4=thumb_tip, 8=index_tip, 12=middle_tip, 16=ring_tip, 20=pinky_tip
     const wrist = landmarks[0];
-    const fingerTips = [4, 8, 12, 16, 20]; // Thumb, Index, Middle, Ring, Pinky tips
-    
-    // Calculate average distance from wrist to finger tips
+    if (!wrist) return;
+
+    // Calculate individual finger distances for better tracking
+    const fingerDistances: any = {
+      "Thumb": 0,
+      "Index": 0,
+      "Middle": 0,
+      "Ring": 0,
+      "Pinky": 0
+    };
+
+    // Thumb: distance from tip (4) to base (2)
+    if (landmarks[4] && landmarks[2]) {
+      fingerDistances.Thumb = Math.hypot(
+        landmarks[4].x - landmarks[2].x,
+        landmarks[4].y - landmarks[2].y,
+        (landmarks[4].z || 0) - (landmarks[2].z || 0)
+      );
+    }
+
+    // Index: distance from tip (8) to base (5)
+    if (landmarks[8] && landmarks[5]) {
+      fingerDistances.Index = Math.hypot(
+        landmarks[8].x - landmarks[5].x,
+        landmarks[8].y - landmarks[5].y,
+        (landmarks[8].z || 0) - (landmarks[5].z || 0)
+      );
+    }
+
+    // Middle: distance from tip (12) to base (9)
+    if (landmarks[12] && landmarks[9]) {
+      fingerDistances.Middle = Math.hypot(
+        landmarks[12].x - landmarks[9].x,
+        landmarks[12].y - landmarks[9].y,
+        (landmarks[12].z || 0) - (landmarks[9].z || 0)
+      );
+    }
+
+    // Ring: distance from tip (16) to base (13)
+    if (landmarks[16] && landmarks[13]) {
+      fingerDistances.Ring = Math.hypot(
+        landmarks[16].x - landmarks[13].x,
+        landmarks[16].y - landmarks[13].y,
+        (landmarks[16].z || 0) - (landmarks[13].z || 0)
+      );
+    }
+
+    // Pinky: distance from tip (20) to base (17)
+    if (landmarks[20] && landmarks[17]) {
+      fingerDistances.Pinky = Math.hypot(
+        landmarks[20].x - landmarks[17].x,
+        landmarks[20].y - landmarks[17].y,
+        (landmarks[20].z || 0) - (landmarks[17].z || 0)
+      );
+    }
+
+    // Calculate overall hand closing from all finger tips to wrist
+    const fingerTips = [4, 8, 12, 16, 20];
     let avgDistance = 0;
     let validTips = 0;
     fingerTips.forEach(tipIdx => {
@@ -889,7 +949,7 @@ export class MotionCaptureService {
         const dist = Math.hypot(
           landmarks[tipIdx].x - wrist.x,
           landmarks[tipIdx].y - wrist.y,
-          landmarks[tipIdx].z - (wrist.z || 0)
+          (landmarks[tipIdx].z || 0) - (wrist.z || 0)
         );
         avgDistance += dist;
         validTips++;
@@ -900,38 +960,47 @@ export class MotionCaptureService {
       avgDistance /= validTips;
     }
     
-    // Improved hand closing calculation - more sensitive
-    // Normalize: 0 = fully open, 1 = fully closed
-    // Adjust the multiplier for better sensitivity (lower = more sensitive)
-    const baseDistance = 0.15; // Base distance for open hand
-    const handCloseAmount = Math.max(0, Math.min(1, 1 - ((avgDistance - baseDistance) * 8)));
+    // Improved hand closing calculation - more sensitive and responsive
+    const baseDistance = 0.12; // Adjusted base distance
+    const handCloseAmount = Math.max(0, Math.min(1, 1 - ((avgDistance - baseDistance) * 10)));
 
+    // Apply finger rotations with individual finger tracking
     const fingers = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
     fingers.forEach(fingerName => {
       const fingerData = riggedHand[side + fingerName];
       if (fingerData) {
         const boneNames = fingerBones[side][fingerName];
+        const fingerDistance = fingerDistances[fingerName] || 0;
+        
+        // Calculate individual finger closing (0 = open, 1 = closed)
+        const fingerBaseDistance = 0.08; // Base distance for individual finger
+        const individualClose = Math.max(0, Math.min(1, 1 - ((fingerDistance - fingerBaseDistance) * 12)));
+        
+        // Combine overall hand closing with individual finger closing
+        const combinedClose = Math.max(handCloseAmount, individualClose * 0.8);
+        
         boneNames.forEach((boneName: string, idx: number) => {
           const bone = this.skeletonHelper.bones.find((b: any) => b.name === boneName);
           if (bone && fingerData) {
-            // Improved closing: stronger effect on middle joints, thumb closes differently
+            // Improved closing with individual finger tracking
             let closeFactor = 0;
             if (fingerName === "Thumb") {
-              // Thumb closes less and at different rate
-              closeFactor = idx > 0 ? handCloseAmount * 0.6 : handCloseAmount * 0.3;
+              // Thumb: different closing pattern
+              closeFactor = idx === 0 ? combinedClose * 0.3 : (idx === 1 ? combinedClose * 0.7 : combinedClose * 0.9);
             } else {
-              // Other fingers: stronger closing on middle and tip joints
-              closeFactor = idx === 0 ? handCloseAmount * 0.4 : (idx === 1 ? handCloseAmount * 1.2 : handCloseAmount * 1.5);
+              // Other fingers: progressive closing from base to tip
+              closeFactor = idx === 0 ? combinedClose * 0.5 : (idx === 1 ? combinedClose * 1.3 : combinedClose * 1.8);
             }
             
+            // Apply rotation from Kalidokit + closing factor
             const rot = {
-              x: (fingerData.x || 0) + closeFactor * 1.8,
+              x: (fingerData.x || 0) + closeFactor * 2.0,
               y: (fingerData.y || 0),
               z: (fingerData.z || 0)
             };
             const euler = new THREE.Euler(rot.x, rot.y, rot.z, "XYZ");
             const quaternion = new THREE.Quaternion().setFromEuler(euler);
-            bone.quaternion.slerp(quaternion, 0.5); // Increased lerp for smoother closing
+            bone.quaternion.slerp(quaternion, 0.6); // Higher lerp for more responsive tracking
           }
         });
       }
@@ -941,54 +1010,108 @@ export class MotionCaptureService {
   private applyFaceMorphs(riggedFace: any): void {
     if (!this.currentModel || !riggedFace) return;
     
-    // Apply mouth opening
-    if (riggedFace.mouth && riggedFace.mouth.y !== undefined) {
-      // Find mouth morph targets (common names in Mixamo models)
-      const mouthMorphs = [
-        'jawOpen', 'mouthOpen', 'Mouth_Open', 'jawOpenY', 'mouthSmile', 'Mouth_Smile'
-      ];
-      
+    // Cache morph target dictionaries to avoid repeated traversals
+    if (!this.morphTargetCache) {
+      this.morphTargetCache = new Map();
       this.currentModel.traverse((child: any) => {
-        if (child.morphTargetInfluences) {
-          // Try to find mouth-related morph targets
-          if (child.morphTargetDictionary) {
-            mouthMorphs.forEach(morphName => {
-              const index = child.morphTargetDictionary[morphName];
-              if (index !== undefined && child.morphTargetInfluences) {
-                // Map mouth.y to morph influence (0-1 range)
-                const mouthOpen = Math.max(0, Math.min(1, riggedFace.mouth.y * 2));
-                child.morphTargetInfluences[index] = mouthOpen;
-              }
-            });
-          }
+        if (child.morphTargetInfluences && child.morphTargetDictionary) {
+          this.morphTargetCache.set(child, child.morphTargetDictionary);
         }
       });
     }
     
-    // Apply eye blinking
-    if (riggedFace.eye && riggedFace.eye !== undefined) {
-      const eyeMorphs = ['eyeBlinkLeft', 'eyeBlinkRight', 'Eye_Blink', 'blinkLeft', 'blinkRight'];
+    // Apply mouth opening - use multiple mouth shape properties
+    if (riggedFace.mouth) {
+      // Calculate mouth opening from multiple sources
+      let mouthOpen = 0;
       
-      this.currentModel.traverse((child: any) => {
-        if (child.morphTargetInfluences && child.morphTargetDictionary) {
-          // Left eye
-          const leftEyeIndex = child.morphTargetDictionary['eyeBlinkLeft'] || 
-                              child.morphTargetDictionary['Eye_Blink_Left'] ||
-                              child.morphTargetDictionary['blinkLeft'];
-          if (leftEyeIndex !== undefined) {
-            const leftBlink = Math.max(0, Math.min(1, riggedFace.eye.l || 0));
-            child.morphTargetInfluences[leftEyeIndex] = leftBlink;
+      // Primary: mouth.y (vertical opening)
+      if (riggedFace.mouth.y !== undefined) {
+        mouthOpen = Math.max(mouthOpen, Math.abs(riggedFace.mouth.y) * 3);
+      }
+      
+      // Secondary: mouth shape properties (I, A, E, O, U)
+      if (riggedFace.mouth.shape) {
+        const shapeValues = [
+          riggedFace.mouth.shape.I || 0,
+          riggedFace.mouth.shape.A || 0,
+          riggedFace.mouth.shape.E || 0,
+          riggedFace.mouth.shape.O || 0,
+          riggedFace.mouth.shape.U || 0
+        ];
+        const maxShape = Math.max(...shapeValues);
+        mouthOpen = Math.max(mouthOpen, maxShape * 1.5);
+      }
+      
+      mouthOpen = Math.max(0, Math.min(1, mouthOpen));
+      
+      // Apply to all possible mouth morph targets
+      const mouthMorphNames = [
+        'jawOpen', 'mouthOpen', 'Mouth_Open', 'jawOpenY', 
+        'jawOpenX', 'Jaw_Open', 'mouthOpenY', 'MouthOpen'
+      ];
+      
+      this.morphTargetCache.forEach((dictionary: any, child: any) => {
+        mouthMorphNames.forEach(morphName => {
+          const index = dictionary[morphName];
+          if (index !== undefined && child.morphTargetInfluences) {
+            child.morphTargetInfluences[index] = mouthOpen;
           }
-          
-          // Right eye
-          const rightEyeIndex = child.morphTargetDictionary['eyeBlinkRight'] || 
-                               child.morphTargetDictionary['Eye_Blink_Right'] ||
-                               child.morphTargetDictionary['blinkRight'];
-          if (rightEyeIndex !== undefined) {
-            const rightBlink = Math.max(0, Math.min(1, riggedFace.eye.r || 0));
-            child.morphTargetInfluences[rightEyeIndex] = rightBlink;
+        });
+      });
+    }
+    
+    // Apply eye blinking - improved with stabilization
+    if (riggedFace.eye) {
+      // Kalidokit: 0 = open, 1 = closed (inverted from VRM)
+      // For FBX morphs, typically 0 = open, 1 = closed
+      let leftBlink = 0;
+      let rightBlink = 0;
+      
+      if (riggedFace.eye.l !== undefined) {
+        // Invert and amplify: Kalidokit gives 0-1 where 1 is closed
+        leftBlink = Math.max(0, Math.min(1, riggedFace.eye.l * 1.2));
+      }
+      
+      if (riggedFace.eye.r !== undefined) {
+        rightBlink = Math.max(0, Math.min(1, riggedFace.eye.r * 1.2));
+      }
+      
+      // Apply to eye morph targets
+      const eyeMorphNames = [
+        'eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft',
+        'eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight',
+        'eyeBlink', 'Eye_Blink', 'blink', 'Blink' // Combined blink
+      ];
+      
+      this.morphTargetCache.forEach((dictionary: any, child: any) => {
+        // Left eye
+        const leftEyeNames = ['eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft'];
+        leftEyeNames.forEach(morphName => {
+          const index = dictionary[morphName];
+          if (index !== undefined && child.morphTargetInfluences) {
+            child.morphTargetInfluences[index] = leftBlink;
           }
-        }
+        });
+        
+        // Right eye
+        const rightEyeNames = ['eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight'];
+        rightEyeNames.forEach(morphName => {
+          const index = dictionary[morphName];
+          if (index !== undefined && child.morphTargetInfluences) {
+            child.morphTargetInfluences[index] = rightBlink;
+          }
+        });
+        
+        // Combined blink (use average)
+        const combinedBlinkNames = ['eyeBlink', 'Eye_Blink', 'blink', 'Blink'];
+        const avgBlink = (leftBlink + rightBlink) / 2;
+        combinedBlinkNames.forEach(morphName => {
+          const index = dictionary[morphName];
+          if (index !== undefined && child.morphTargetInfluences) {
+            child.morphTargetInfluences[index] = avgBlink;
+          }
+        });
       });
     }
   }
