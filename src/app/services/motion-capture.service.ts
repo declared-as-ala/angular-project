@@ -1051,14 +1051,18 @@ export class MotionCaptureService {
         'jawOpenX', 'Jaw_Open', 'mouthOpenY', 'MouthOpen'
       ];
       
-      this.morphTargetCache.forEach((dictionary: any, child: any) => {
-        mouthMorphNames.forEach(morphName => {
-          const index = dictionary[morphName];
-          if (index !== undefined && child.morphTargetInfluences) {
-            child.morphTargetInfluences[index] = mouthOpen;
-          }
+      if (this.morphTargetCache) {
+        this.morphTargetCache.forEach((dictionary: any, child: any) => {
+          if (!child || !child.morphTargetInfluences) return;
+          
+          mouthMorphNames.forEach(morphName => {
+            const index = dictionary[morphName];
+            if (index !== undefined && child.morphTargetInfluences) {
+              child.morphTargetInfluences[index] = mouthOpen;
+            }
+          });
         });
-      });
+      }
     }
     
     // Apply eye blinking - improved with stabilization
@@ -1084,35 +1088,39 @@ export class MotionCaptureService {
         'eyeBlink', 'Eye_Blink', 'blink', 'Blink' // Combined blink
       ];
       
-      this.morphTargetCache.forEach((dictionary: any, child: any) => {
-        // Left eye
-        const leftEyeNames = ['eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft'];
-        leftEyeNames.forEach(morphName => {
-          const index = dictionary[morphName];
-          if (index !== undefined && child.morphTargetInfluences) {
-            child.morphTargetInfluences[index] = leftBlink;
-          }
+      if (this.morphTargetCache) {
+        this.morphTargetCache.forEach((dictionary: any, child: any) => {
+          if (!child || !child.morphTargetInfluences) return;
+          
+          // Left eye
+          const leftEyeNames = ['eyeBlinkLeft', 'Eye_Blink_Left', 'blinkLeft', 'BlinkLeft'];
+          leftEyeNames.forEach(morphName => {
+            const index = dictionary[morphName];
+            if (index !== undefined && child.morphTargetInfluences) {
+              child.morphTargetInfluences[index] = leftBlink;
+            }
+          });
+          
+          // Right eye
+          const rightEyeNames = ['eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight'];
+          rightEyeNames.forEach(morphName => {
+            const index = dictionary[morphName];
+            if (index !== undefined && child.morphTargetInfluences) {
+              child.morphTargetInfluences[index] = rightBlink;
+            }
+          });
+          
+          // Combined blink (use average)
+          const combinedBlinkNames = ['eyeBlink', 'Eye_Blink', 'blink', 'Blink'];
+          const avgBlink = (leftBlink + rightBlink) / 2;
+          combinedBlinkNames.forEach(morphName => {
+            const index = dictionary[morphName];
+            if (index !== undefined && child.morphTargetInfluences) {
+              child.morphTargetInfluences[index] = avgBlink;
+            }
+          });
         });
-        
-        // Right eye
-        const rightEyeNames = ['eyeBlinkRight', 'Eye_Blink_Right', 'blinkRight', 'BlinkRight'];
-        rightEyeNames.forEach(morphName => {
-          const index = dictionary[morphName];
-          if (index !== undefined && child.morphTargetInfluences) {
-            child.morphTargetInfluences[index] = rightBlink;
-          }
-        });
-        
-        // Combined blink (use average)
-        const combinedBlinkNames = ['eyeBlink', 'Eye_Blink', 'blink', 'Blink'];
-        const avgBlink = (leftBlink + rightBlink) / 2;
-        combinedBlinkNames.forEach(morphName => {
-          const index = dictionary[morphName];
-          if (index !== undefined && child.morphTargetInfluences) {
-            child.morphTargetInfluences[index] = avgBlink;
-          }
-        });
-      });
+      }
     }
   }
 
