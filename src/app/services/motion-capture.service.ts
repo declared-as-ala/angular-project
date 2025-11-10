@@ -1014,8 +1014,8 @@ export class MotionCaptureService {
     if (!this.morphTargetCache) {
       this.morphTargetCache = new Map();
       this.currentModel.traverse((child: any) => {
-        if (child.morphTargetInfluences && child.morphTargetDictionary) {
-          this.morphTargetCache.set(child, child.morphTargetDictionary);
+        if (child && child.morphTargetInfluences && child.morphTargetDictionary) {
+          this.morphTargetCache!.set(child, child.morphTargetDictionary);
         }
       });
     }
