@@ -30,18 +30,11 @@
   
   <!-- MediaPipe Tasks Vision for FaceLandmarker with blendshapes -->
   <script type="module">
-    (async () => {
-      try {
-        const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3");
-        const { FilesetResolver, FaceLandmarker } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3");
-        window.MediaPipeVision = vision;
-        window.FilesetResolver = FilesetResolver;
-        window.FaceLandmarker = FaceLandmarker;
-        console.log('MediaPipe FaceLandmarker loaded successfully');
-      } catch (error) {
-        console.error('Failed to load MediaPipe FaceLandmarker:', error);
-      }
-    })();
+    import vision from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+    import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+    window.MediaPipeVision = vision;
+    window.FilesetResolver = FilesetResolver;
+    window.FaceLandmarker = FaceLandmarker;
   </script>
   
   <!-- Kalidokit -->
