@@ -4,8 +4,10 @@
   "installCommand": "npm install",
   "rewrites": [
     {
-      "source": "/((?!assets/).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
-  ]
+  ],
+  "cleanUrls": true,
+  "trailingSlash": false
 }
