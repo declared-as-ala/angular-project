@@ -44,6 +44,10 @@ export class MotionCaptureService {
   private previousRightBlink = 0;
   // Smooth mouth opening values to prevent glitches
   private previousMouthOpen = 0;
+  // Smooth jaw movement values
+  private previousJawLeft = 0;
+  private previousJawRight = 0;
+  private previousJawForward = 0;
   private animationClock: any = null;
   private currentAnimation: any = null;
   private availableAnimations: any[] = [];
@@ -427,8 +431,11 @@ export class MotionCaptureService {
     // Reset eye blink smoothing values
     this.previousLeftBlink = 0;
     this.previousRightBlink = 0;
-    // Reset mouth opening smoothing value
+    // Reset mouth opening and jaw movement smoothing values
     this.previousMouthOpen = 0;
+    this.previousJawLeft = 0;
+    this.previousJawRight = 0;
+    this.previousJawForward = 0;
 
     // Scale and position model
     const box = new THREE.Box3().setFromObject(model);
@@ -595,22 +602,9 @@ export class MotionCaptureService {
                 const faceResults = this.faceLandmarker.detectForVideo(video, startTimeMs);
                 if (faceResults && faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
                   this.faceBlendshapesResults = faceResults;
-                  
-                  // Debug: Log jawOpen value occasionally
-                  if (Math.random() < 0.05) { // Log 5% of frames
-                    const jawOpenBlendshape = faceResults.faceBlendshapes[0].categories.find((b: any) => b.categoryName === 'jawOpen');
-                    if (jawOpenBlendshape) {
-                      console.log('FaceLandmarker jawOpen detected:', jawOpenBlendshape.score);
-                    }
-                  }
                 }
               } catch (error: any) {
-                console.warn('FaceLandmarker error:', error);
-              }
-            } else {
-              // Debug: Log if FaceLandmarker is not initialized
-              if (Math.random() < 0.01) { // Log 1% of frames
-                console.warn('FaceLandmarker not initialized');
+                // Silently fail - FaceLandmarker is optional
               }
             }
           } catch (error: any) {
@@ -673,10 +667,8 @@ export class MotionCaptureService {
       });
       
       console.log('FaceLandmarker initialized with blendshapes support');
-      this.updateStatus('FaceLandmarker ready for mouth tracking', 'success');
     } catch (error: any) {
-      console.error('Failed to initialize FaceLandmarker:', error);
-      this.updateStatus('FaceLandmarker initialization failed - using fallback methods', 'info');
+      console.warn('Failed to initialize FaceLandmarker:', error);
       // Continue without FaceLandmarker - it's optional
     }
   }
@@ -1132,15 +1124,7 @@ export class MotionCaptureService {
           });
         }
       });
-      console.log('Found morph targets:', foundMorphs);
-      
-      // Specifically look for mouth/jaw related morph targets
-      const mouthRelatedMorphs = foundMorphs.filter(name => 
-        name.toLowerCase().includes('jaw') || 
-        name.toLowerCase().includes('mouth') ||
-        name.toLowerCase().includes('open')
-      );
-      console.log('Mouth/Jaw related morph targets:', mouthRelatedMorphs);
+      console.log('Found morph targets:', foundMorphs.slice(0, 20)); // Log first 20
     }
     
     // Apply mouth opening - 3DINO PROJECT APPROACH: Use MediaPipe FaceLandmarker blendshapes directly
@@ -1152,183 +1136,152 @@ export class MotionCaptureService {
       
       const faceBlendshapes = this.faceBlendshapesResults.faceBlendshapes[0].categories;
       
-      // Find jawOpen blendshape
-      const jawOpenBlendshape = faceBlendshapes.find((b: any) => b.categoryName === 'jawOpen');
-      const jawOpenScore = jawOpenBlendshape ? jawOpenBlendshape.score : 0;
+      // MediaPipe blendshape mapping (from 3dino project)
+      const blendshapesMap: any = {
+        'jawOpen': 'jawOpen',
+        'jawForward': 'jawForward',
+        'jawLeft': 'jawLeft',
+        'jawRight': 'jawRight',
+        'mouthClose': 'mouthClose',
+        'mouthFunnel': 'mouthFunnel',
+        'mouthPucker': 'mouthPucker',
+        'mouthRollLower': 'mouthRollLower',
+        'mouthRollUpper': 'mouthRollUpper',
+        'mouthShrugLower': 'mouthShrugLower',
+        'mouthShrugUpper': 'mouthShrugUpper',
+        'mouthLowerDownLeft': 'mouthLowerDown_L',
+        'mouthLowerDownRight': 'mouthLowerDown_R',
+        'mouthUpperUpLeft': 'mouthUpperUp_L',
+        'mouthUpperUpRight': 'mouthUpperUp_R'
+      };
       
-      // Debug logging (occasionally)
-      if (Math.random() < 0.02 && jawOpenScore > 0.1) { // Log 2% of frames when mouth is opening
-        console.log('FaceLandmarker jawOpen score:', jawOpenScore);
-      }
-      
-      // Comprehensive morph target name variations for jawOpen
-      const jawOpenMorphNames = [
-        'jawOpen', 'JawOpen', 'jaw_open', 'Jaw_Open', 'jawOpenY', 'JawOpenY',
-        'mouthOpen', 'MouthOpen', 'Mouth_Open', 'mouthOpenY', 'MouthOpenY',
-        'jawOpenX', 'jawOpenZ', 'Jaw_Open_Y', 'mouth_open', 'mouth_open_y',
-        'jawOpenVertical', 'JawOpenVertical', 'Mouth_Open_Y',
-        // Additional variations
-        'jaw_open_y', 'Jaw_Open_Y', 'mouthOpenVertical', 'MouthOpenVertical',
-        'jawDrop', 'JawDrop', 'jaw_drop', 'Jaw_Drop'
-      ];
-      
-      let jawOpenApplied = false;
-      let foundMorphTargets: string[] = [];
+      // Store jaw movement values for bone rotation
+      let jawOpenValue = 0;
+      let jawLeftValue = 0;
+      let jawRightValue = 0;
+      let jawForwardValue = 0;
       
       if (this.morphTargetCache) {
         this.morphTargetCache.forEach((dictionary: any, child: any) => {
           if (!child || !child.morphTargetInfluences) return;
           
-          // First, let's see what morph targets are actually available
-          const availableMorphs = Object.keys(dictionary);
-          
-          // Try all possible jawOpen morph target names
-          for (const morphName of jawOpenMorphNames) {
-            const index = dictionary[morphName];
-            if (index !== undefined && child.morphTargetInfluences) {
-              // Aggressive amplification for full mouth opening
-              // MediaPipe provides 0-1, we amplify to ensure full opening
-              const amplified = Math.min(1, jawOpenScore * 3.0); // 3x amplification for better visibility
-              child.morphTargetInfluences[index] = amplified;
-              jawOpenApplied = true;
-              foundMorphTargets.push(morphName);
-              
-              // Always log when applying (for debugging)
-              if (jawOpenScore > 0.3) {
-                console.log(`✅ Applied jawOpen to morph target "${morphName}" (index: ${index}) with value:`, amplified, 'from score:', jawOpenScore);
-              }
-              break; // Found and applied, no need to try other names
-            }
-          }
-          
-          // If we didn't find a match, log available morphs for debugging
-          if (!jawOpenApplied && jawOpenScore > 0.3 && Math.random() < 0.1) {
-            const mouthRelated = availableMorphs.filter(name => 
-              name.toLowerCase().includes('jaw') || 
-              name.toLowerCase().includes('mouth') ||
-              name.toLowerCase().includes('open')
-            );
-            if (mouthRelated.length > 0) {
-              console.warn('⚠️ jawOpen not found, but found these mouth-related morphs:', mouthRelated);
-              console.warn('Available morph targets:', availableMorphs.slice(0, 30));
-            }
-          }
-          
-          // Also apply other mouth-related blendshapes
+          // Apply each blendshape directly (3dino approach)
           for (const blendshape of faceBlendshapes) {
             const categoryName = blendshape.categoryName;
-            const score = blendshape.score;
+            const score = blendshape.score; // 0-1 value from MediaPipe
             
-            // Skip jawOpen (already handled above)
-            if (categoryName === 'jawOpen') continue;
-            
-            // Map other blendshapes
-            let morphNames: string[] = [];
-            if (categoryName === 'mouthLowerDownLeft' || categoryName === 'mouthLowerDownRight') {
-              morphNames = ['mouthLowerDown_L', 'mouthLowerDown_R', 'mouthLowerDown', 'MouthLowerDown'];
-            } else if (categoryName === 'mouthUpperUpLeft' || categoryName === 'mouthUpperUpRight') {
-              morphNames = ['mouthUpperUp_L', 'mouthUpperUp_R', 'mouthUpperUp', 'MouthUpperUp'];
-            }
-            
-            for (const morphName of morphNames) {
+            // Map MediaPipe blendshape name to our morph target name
+            const morphName = blendshapesMap[categoryName];
+            if (morphName) {
               const index = dictionary[morphName];
               if (index !== undefined && child.morphTargetInfluences) {
-                child.morphTargetInfluences[index] = Math.min(1, score * 1.5);
+                // Direct application with amplification for better visibility
+                // MediaPipe provides 0-1, amplify for full opening
+                const amplified = Math.min(1, score * 1.5); // Amplify by 1.5x for better visibility
+                child.morphTargetInfluences[index] = amplified;
               }
+            }
+            
+            // Special handling for jawOpen - most important for mouth opening
+            if (categoryName === 'jawOpen') {
+              const jawOpenIndex = dictionary['jawOpen'] || 
+                                   dictionary['JawOpen'] || 
+                                   dictionary['jaw_open'] ||
+                                   dictionary['Jaw_Open'] ||
+                                   dictionary['mouthOpen'] ||
+                                   dictionary['MouthOpen'] ||
+                                   dictionary['Mouth_Open'];
+              
+              if (jawOpenIndex !== undefined && child.morphTargetInfluences) {
+                // Amplify jawOpen more aggressively for full opening
+                jawOpenValue = Math.min(1, score * 2.0); // 2x amplification
+                child.morphTargetInfluences[jawOpenIndex] = jawOpenValue;
+                this.previousMouthOpen = jawOpenValue; // Update for smoothing
+              }
+            }
+            
+            // Track jaw movement values for bone rotation
+            if (categoryName === 'jawLeft') {
+              jawLeftValue = score;
+            } else if (categoryName === 'jawRight') {
+              jawRightValue = score;
+            } else if (categoryName === 'jawForward') {
+              jawForwardValue = score;
             }
           }
         });
       }
       
-      // If no morph targets found, try jaw bone rotation as fallback
-      if (!jawOpenApplied && this.skeletonHelper && this.skeletonHelper.bones) {
-        // Try to find the actual JAW bone (not head bone)
-        // Priority: mixamorigJaw > jaw > chin (but NOT head)
-        const jawBoneNames = ['mixamorigJaw', 'Jaw', 'jaw', 'chin', 'Chin'];
-        let jawBone: any = null;
-        
-        for (const boneName of jawBoneNames) {
-          jawBone = this.skeletonHelper.bones.find((b: any) => 
-            b.name && 
-            b.name.toLowerCase().includes(boneName.toLowerCase()) &&
-            !b.name.toLowerCase().includes('head') // Exclude head bones
-          );
-          if (jawBone) break;
-        }
+      // Apply jaw bone rotation based on jaw movement (jawLeft, jawRight, jawForward)
+      // This makes the jaw follow your actual jaw movements
+      if (this.skeletonHelper && this.skeletonHelper.bones) {
+        const jawBone = this.skeletonHelper.bones.find((b: any) => 
+          b.name && (b.name.includes('Jaw') || b.name.includes('jaw') || 
+                    b.name.toLowerCase().includes('jaw') ||
+                    b.name === 'mixamorigHead' || b.name === 'mixamorig:Head')
+        );
         
         if (jawBone) {
           const THREE = this.getTHREE();
           
-          // Store initial rotation if not already stored
-          if (!this.initRotation['Jaw']) {
-            this.initRotation['Jaw'] = {
-              x: jawBone.rotation.x,
-              y: jawBone.rotation.y,
-              z: jawBone.rotation.z
-            };
-            console.log(`Stored initial jaw rotation for "${jawBone.name}":`, this.initRotation['Jaw']);
-          }
+          // Smooth jaw movement values
+          const smoothedJawLeft = this.previousJawLeft + (jawLeftValue - this.previousJawLeft) * 0.7;
+          const smoothedJawRight = this.previousJawRight + (jawRightValue - this.previousJawRight) * 0.7;
+          const smoothedJawForward = this.previousJawForward + (jawForwardValue - this.previousJawForward) * 0.7;
           
-          // Apply rotation relative to initial rotation (like SysMocap does)
-          // Rotate jaw DOWN (positive X rotation) when mouth opens
-          const jawRotationX = this.initRotation['Jaw'].x + (jawOpenScore * 0.8); // Max 0.8 radians (~46 degrees)
+          this.previousJawLeft = smoothedJawLeft;
+          this.previousJawRight = smoothedJawRight;
+          this.previousJawForward = smoothedJawForward;
+          
+          // Calculate jaw rotation:
+          // - X rotation: jaw opening (down) + forward movement
+          // - Y rotation: left/right movement (yaw)
+          // - Z rotation: side tilt (roll) - can be derived from left/right difference
+          
+          const jawRotationX = (jawOpenValue * 0.4) + (smoothedJawForward * 0.2); // Open down + forward
+          const jawRotationY = (smoothedJawRight - smoothedJawLeft) * 0.5; // Left/right movement
+          const jawRotationZ = (smoothedJawLeft - smoothedJawRight) * 0.3; // Tilt based on side movement
+          
+          // Apply rotation to jaw bone
           const euler = new THREE.Euler(
             jawRotationX,
-            this.initRotation['Jaw'].y,
-            this.initRotation['Jaw'].z,
+            jawRotationY,
+            jawRotationZ,
             'XYZ'
           );
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
-          jawBone.quaternion.slerp(quaternion, 0.95); // Very high lerp for immediate response
-          
-          if (jawOpenScore > 0.3) {
-            console.log(`✅ Applied jawOpen via bone rotation on "${jawBone.name}":`, jawRotationX - this.initRotation['Jaw'].x, 'radians from score:', jawOpenScore);
-          }
-          jawOpenApplied = true;
-        } else {
-          // If no jaw bone found, try head bone as last resort (but with different approach)
-          const headBone = this.skeletonHelper.bones.find((b: any) => 
-            b.name && (b.name === 'mixamorigHead' || b.name.toLowerCase().includes('head'))
-          );
-          
-          if (headBone) {
-            // Try to find a child bone that might be the jaw
-            // In some models, the jaw is a child of the head
-            const headBoneObj = headBone as any;
-            if (headBoneObj.children && headBoneObj.children.length > 0) {
-              for (const child of headBoneObj.children) {
-                if (child.name && (child.name.toLowerCase().includes('jaw') || child.name.toLowerCase().includes('chin'))) {
-                  jawBone = child;
-                  break;
-                }
-              }
-            }
-            
-            // If still no jaw, log all bones for debugging
-            if (!jawBone && jawOpenScore > 0.3 && Math.random() < 0.1) {
-              const boneNames = this.skeletonHelper.bones.map((b: any) => b.name).filter((n: string) => n);
-              const allBones = boneNames.join(', ');
-              console.warn('⚠️ No jaw bone found. All bones:', allBones);
-              
-              // Also check head bone children
-              if (headBoneObj.children) {
-                const childNames = headBoneObj.children.map((c: any) => c.name).filter((n: string) => n);
-                console.warn('Head bone children:', childNames);
-              }
-            }
-          }
+          jawBone.quaternion.slerp(quaternion, 0.8); // High lerp for responsive tracking
         }
       }
       
-      // Final check: if still not applied, log warning
-      if (!jawOpenApplied && jawOpenScore > 0.3 && Math.random() < 0.05) {
-        console.error('❌ jawOpen detected but NOT applied! Score:', jawOpenScore);
-        console.error('Morph target cache exists:', !!this.morphTargetCache);
-        console.error('Skeleton helper exists:', !!this.skeletonHelper);
+      // Also use facial transformation matrix for head/jaw orientation (from 3dino project)
+      if (this.faceBlendshapesResults && this.faceBlendshapesResults.facialTransformationMatrixes && 
+          this.faceBlendshapesResults.facialTransformationMatrixes.length > 0) {
+        const faceMatrix = this.faceBlendshapesResults.facialTransformationMatrixes[0];
+        if (faceMatrix && faceMatrix.data && this.skeletonHelper && this.skeletonHelper.bones) {
+          const THREE = this.getTHREE();
+          const faceOrientationMatrix = new THREE.Matrix4();
+          faceOrientationMatrix.fromArray(faceMatrix.data);
+          
+          // Extract rotation from matrix
+          const faceQuaternion = new THREE.Quaternion();
+          const position = new THREE.Vector3();
+          const scale = new THREE.Vector3();
+          faceOrientationMatrix.decompose(position, faceQuaternion, scale);
+          
+          // Apply to head bone (if available) - this tracks head movement
+          const headBone = this.skeletonHelper.bones.find((b: any) => 
+            b.name && (b.name.includes('Head') || b.name.includes('head') || 
+                      b.name === 'mixamorigHead' || b.name === 'mixamorig:Head' ||
+                      b.name === 'mixamorigNeck' || b.name === 'mixamorig:Neck')
+          );
+          
+          if (headBone) {
+            // Blend head rotation with jaw movement
+            headBone.quaternion.slerp(faceQuaternion, 0.6);
+          }
+        }
       }
-      
-      // Update previous value for smoothing
-      this.previousMouthOpen = Math.min(1, jawOpenScore * 3.0);
     }
     
     // FALLBACK APPROACH: Use Kalidokit values if FaceLandmarker blendshapes not available
