@@ -1,0 +1,132 @@
+<div class="container">
+    <div class="left-panel">
+        <h1>🎭 Avatar Control</h1>
+        <div class="subtitle">Advanced Motion Capture & Animation</div>
+        
+        <!-- Mode Selector -->
+        <div class="mode-selector">
+            <button 
+                class="mode-btn" 
+                [class.active]="currentMode === 'tracking'"
+                (click)="switchMode('tracking')">
+                📹 Tracking
+            </button>
+            <button 
+                class="mode-btn" 
+                [class.active]="currentMode === 'animation'"
+                (click)="switchMode('animation')">
+                🎬 Animation
+            </button>
+        </div>
+
+        <!-- Model Loading Section -->
+        <div class="section">
+            <div class="section-title">📁 Load Model</div>
+            <input 
+                type="file" 
+                #modelInput
+                accept=".fbx" 
+                (change)="onModelFileSelected($event)" />
+        </div>
+
+        <!-- Tracking Mode Section -->
+        <div class="section" *ngIf="currentMode === 'tracking'">
+            <div class="section-title">🎯 Motion Tracking</div>
+            <div class="tracking-buttons">
+                <button 
+                    (click)="startTracking()" 
+                    [disabled]="isTracking">
+                    ▶️ Start Camera
+                </button>
+                <button 
+                    (click)="stopTracking()" 
+                    [disabled]="!isTracking">
+                    ⏹️ Stop
+                </button>
+            </div>
+            <div class="tracking-buttons" style="margin-top: 10px;">
+                <button 
+                    (click)="changeTarget('face')" 
+                    class="btn-secondary"
+                    [class.active]="trackingTarget === 'face'">
+                    👤 Face
+                </button>
+                <button 
+                    (click)="changeTarget('half')" 
+                    class="btn-secondary"
+                    [class.active]="trackingTarget === 'half'">
+                    🖐️ Half Body
+                </button>
+                <button 
+                    (click)="changeTarget('full')" 
+                    class="btn-secondary"
+                    [class.active]="trackingTarget === 'full'">
+                    🚶 Full Body
+                </button>
+            </div>
+        </div>
+
+        <!-- Animation Mode Section -->
+        <div class="section" *ngIf="currentMode === 'animation'">
+            <div class="section-title">🎬 Mixamo Animations</div>
+            <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-bottom: 15px;">
+                Click an animation to play it directly
+            </div>
+            <div class="animation-list">
+                <div 
+                    class="animation-item" 
+                    [class.active]="!isAnimationPlaying"
+                    (click)="selectAndPlayAnimation(null)">
+                    ⏹️ Stop Animation
+                </div>
+                <div 
+                    *ngFor="let anim of availableAnimations; let i = index"
+                    class="animation-item"
+                    [class.active]="isAnimationPlaying && currentAnimation === anim"
+                    (click)="selectAndPlayAnimation(anim)">
+                    <span *ngIf="isAnimationPlaying && currentAnimation === anim">▶️ </span>
+                    {{ anim.name || 'Animation ' + (i + 1) }}
+                </div>
+                <div *ngIf="availableAnimations.length === 0" 
+                     style="padding: 10px; opacity: 0.5; cursor: default;">
+                    Loading animations...
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                <div style="font-size: 11px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">
+                    Load custom animation:
+                </div>
+                <input 
+                    type="file" 
+                    #animationInput
+                    accept=".fbx" 
+                    (change)="onAnimationFileSelected($event)"
+                    style="margin-top: 5px;" />
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div class="status" [ngClass]="statusType">
+            {{ statusMessage }}
+        </div>
+
+        <!-- Info -->
+        <div class="info-box">
+            <strong>Controls:</strong><br>
+            🖱️ Click & drag to rotate<br>
+            🖱️ Mouse wheel to zoom<br>
+            👆 Pinch to zoom (touch)
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <div #modelContainer id="model-container"></div>
+        <!-- Video Preview - Bottom Right -->
+        <div class="video-container" [style.display]="isTracking ? 'block' : 'none'">
+            <video #videoElement autoplay playsinline></video>
+            <canvas #canvasElement></canvas>
+        </div>
+    </div>
+</div>
+
+
