@@ -30,9 +30,11 @@ export class MotionCaptureService {
   private isTracking = false;
   private morphTargetCache: Map<any, any> | null = null;
   private holistic: any = null;
+  private faceLandmarker: any = null; // MediaPipe FaceLandmarker for direct blendshapes
   private videoElement: HTMLVideoElement | null = null;
   private canvasElement: HTMLCanvasElement | null = null;
   private canvasCtx: CanvasRenderingContext2D | null = null;
+  private faceBlendshapesResults: any = null; // Store latest blendshape results
   private positionOffset = { x: 0, y: 1, z: 0 };
   private trackingTarget: 'face' | 'half' | 'full' = 'face';
   private currentMode: 'tracking' | 'animation' = 'tracking';
@@ -572,6 +574,11 @@ export class MotionCaptureService {
       if (!this.holistic) {
         this.initMediaPipe();
       }
+      
+      // Initialize FaceLandmarker for direct blendshapes (like 3dino project)
+      if (!this.faceLandmarker) {
+        await this.initFaceLandmarker();
+      }
 
       // Wait a bit for video to be ready
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -580,6 +587,19 @@ export class MotionCaptureService {
         if (this.isTracking && video.readyState === video.HAVE_ENOUGH_DATA) {
           try {
             await this.holistic.send({ image: video });
+            
+            // Also process with FaceLandmarker for direct blendshapes (3dino approach)
+            if (this.faceLandmarker) {
+              const startTimeMs = performance.now();
+              try {
+                const faceResults = this.faceLandmarker.detectForVideo(video, startTimeMs);
+                if (faceResults && faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
+                  this.faceBlendshapesResults = faceResults;
+                }
+              } catch (error: any) {
+                // Silently fail - FaceLandmarker is optional
+              }
+            }
           } catch (error: any) {
             console.error('Error processing frame:', error);
           }
@@ -613,6 +633,37 @@ export class MotionCaptureService {
       this.videoElement.srcObject = null;
     }
     this.updateStatus('Tracking stopped', 'info');
+  }
+
+  private async initFaceLandmarker(): Promise<void> {
+    try {
+      if (typeof FilesetResolver === 'undefined' || typeof FaceLandmarker === 'undefined') {
+        console.warn('MediaPipe FaceLandmarker not available, skipping blendshape detection');
+        return;
+      }
+
+      const filesetResolver = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+      );
+
+      this.faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+          delegate: "GPU"
+        },
+        modelComplexity: 1,
+        outputFaceBlendshapes: true, // Enable blendshapes output (key feature from 3dino)
+        outputFaceGeometry: true,
+        outputFacialTransformationMatrixes: true,
+        runningMode: "VIDEO",
+        numFaces: 1
+      });
+      
+      console.log('FaceLandmarker initialized with blendshapes support');
+    } catch (error: any) {
+      console.warn('Failed to initialize FaceLandmarker:', error);
+      // Continue without FaceLandmarker - it's optional
+    }
   }
 
   private initMediaPipe(): void {
@@ -1069,88 +1120,126 @@ export class MotionCaptureService {
       console.log('Found morph targets:', foundMorphs.slice(0, 20)); // Log first 20
     }
     
-    // Apply mouth opening - ALTERNATIVE APPROACH using direct MediaPipe landmarks
-    if (riggedFace.mouth) {
+    // Apply mouth opening - 3DINO PROJECT APPROACH: Use MediaPipe FaceLandmarker blendshapes directly
+    // This is the most reliable method as it uses MediaPipe's native blendshape detection
+    
+    // PRIMARY APPROACH: Direct MediaPipe blendshapes (from 3dino project)
+    if (this.faceBlendshapesResults && this.faceBlendshapesResults.faceBlendshapes && 
+        this.faceBlendshapesResults.faceBlendshapes.length > 0) {
+      
+      const faceBlendshapes = this.faceBlendshapesResults.faceBlendshapes[0].categories;
+      
+      // MediaPipe blendshape mapping (from 3dino project)
+      const blendshapesMap: any = {
+        'jawOpen': 'jawOpen',
+        'jawForward': 'jawForward',
+        'jawLeft': 'jawLeft',
+        'jawRight': 'jawRight',
+        'mouthClose': 'mouthClose',
+        'mouthFunnel': 'mouthFunnel',
+        'mouthPucker': 'mouthPucker',
+        'mouthRollLower': 'mouthRollLower',
+        'mouthRollUpper': 'mouthRollUpper',
+        'mouthShrugLower': 'mouthShrugLower',
+        'mouthShrugUpper': 'mouthShrugUpper',
+        'mouthLowerDownLeft': 'mouthLowerDown_L',
+        'mouthLowerDownRight': 'mouthLowerDown_R',
+        'mouthUpperUpLeft': 'mouthUpperUp_L',
+        'mouthUpperUpRight': 'mouthUpperUp_R'
+      };
+      
+      if (this.morphTargetCache) {
+        this.morphTargetCache.forEach((dictionary: any, child: any) => {
+          if (!child || !child.morphTargetInfluences) return;
+          
+          // Apply each blendshape directly (3dino approach)
+          for (const blendshape of faceBlendshapes) {
+            const categoryName = blendshape.categoryName;
+            const score = blendshape.score; // 0-1 value from MediaPipe
+            
+            // Map MediaPipe blendshape name to our morph target name
+            const morphName = blendshapesMap[categoryName];
+            if (morphName) {
+              const index = dictionary[morphName];
+              if (index !== undefined && child.morphTargetInfluences) {
+                // Direct application with amplification for better visibility
+                // MediaPipe provides 0-1, amplify for full opening
+                const amplified = Math.min(1, score * 1.5); // Amplify by 1.5x for better visibility
+                child.morphTargetInfluences[index] = amplified;
+              }
+            }
+            
+            // Special handling for jawOpen - most important for mouth opening
+            if (categoryName === 'jawOpen') {
+              const jawOpenIndex = dictionary['jawOpen'] || 
+                                   dictionary['JawOpen'] || 
+                                   dictionary['jaw_open'] ||
+                                   dictionary['Jaw_Open'] ||
+                                   dictionary['mouthOpen'] ||
+                                   dictionary['MouthOpen'] ||
+                                   dictionary['Mouth_Open'];
+              
+              if (jawOpenIndex !== undefined && child.morphTargetInfluences) {
+                // Amplify jawOpen more aggressively for full opening
+                const jawOpenValue = Math.min(1, score * 2.0); // 2x amplification
+                child.morphTargetInfluences[jawOpenIndex] = jawOpenValue;
+                this.previousMouthOpen = jawOpenValue; // Update for smoothing
+              }
+            }
+          }
+        });
+      }
+    }
+    
+    // FALLBACK APPROACH: Use Kalidokit values if FaceLandmarker blendshapes not available
+    else if (riggedFace.mouth) {
       let targetMouthOpen = 0;
       
-      // APPROACH 1: Direct MediaPipe landmark calculation (most reliable)
-      // MediaPipe face landmarks: upper lip ~13, lower lip ~14, mouth corners ~61, 291
+      // APPROACH 1: Direct MediaPipe landmark calculation
       if (faceLandmarks && faceLandmarks.length >= 478) {
-        // Key mouth landmarks in MediaPipe Face Mesh (468 points)
-        // Upper lip center: ~13, Lower lip center: ~14
-        // Alternative: use mouth opening landmarks
-        const upperLip = faceLandmarks[13]; // Upper lip center
-        const lowerLip = faceLandmarks[14]; // Lower lip center
+        const upperLip = faceLandmarks[13];
+        const lowerLip = faceLandmarks[14];
         
         if (upperLip && lowerLip) {
-          // Calculate vertical distance between upper and lower lip
           const mouthDistance = Math.hypot(
             lowerLip.x - upperLip.x,
             lowerLip.y - upperLip.y,
             (lowerLip.z || 0) - (upperLip.z || 0)
           );
-          
-          // Normalize: typical closed mouth distance ~0.02-0.03, open ~0.08-0.12
-          // Use exponential mapping for better sensitivity
           const normalizedDistance = Math.min(1, Math.max(0, (mouthDistance - 0.02) * 15));
           targetMouthOpen = Math.max(targetMouthOpen, normalizedDistance);
         }
       }
       
-      // APPROACH 2: Kalidokit mouth.y (try both positive and negative)
+      // APPROACH 2: Kalidokit mouth.y
       if (riggedFace.mouth.y !== undefined) {
-        // Try both directions - might be inverted
         const mouthYPositive = Math.max(0, riggedFace.mouth.y) * 8.0;
         const mouthYNegative = Math.max(0, -riggedFace.mouth.y) * 8.0;
         targetMouthOpen = Math.max(targetMouthOpen, mouthYPositive, mouthYNegative);
       }
       
-      // APPROACH 3: mouth.mouthOpen property (if available)
+      // APPROACH 3: mouth.mouthOpen property
       if (riggedFace.mouth.mouthOpen !== undefined) {
         targetMouthOpen = Math.max(targetMouthOpen, riggedFace.mouth.mouthOpen * 3.0);
       }
       
-      // APPROACH 4: mouth shape properties (I, A, E, O, U) - prioritize A and O (most open)
+      // APPROACH 4: mouth shape properties
       if (riggedFace.mouth.shape) {
-        const shapeA = (riggedFace.mouth.shape.A || 0) * 4.0; // "ah" sound (wide open)
-        const shapeO = (riggedFace.mouth.shape.O || 0) * 4.0; // "oh" sound (round open)
-        const shapeI = (riggedFace.mouth.shape.I || 0) * 2.0; // "ih" sound
-        const shapeE = (riggedFace.mouth.shape.E || 0) * 2.0; // "eh" sound
-        const shapeU = (riggedFace.mouth.shape.U || 0) * 2.0; // "oo" sound
-        
-        targetMouthOpen = Math.max(targetMouthOpen, shapeA, shapeO, shapeI, shapeE, shapeU);
+        const shapeA = (riggedFace.mouth.shape.A || 0) * 4.0;
+        const shapeO = (riggedFace.mouth.shape.O || 0) * 4.0;
+        targetMouthOpen = Math.max(targetMouthOpen, shapeA, shapeO);
       }
       
-      // Debug logging (only log occasionally to avoid spam)
-      if (Math.random() < 0.01) { // Log 1% of frames
-        console.log('Mouth tracking debug:', {
-          mouthY: riggedFace.mouth.y,
-          mouthOpen: riggedFace.mouth.mouthOpen,
-          shapeA: riggedFace.mouth.shape?.A,
-          shapeO: riggedFace.mouth.shape?.O,
-          targetMouthOpen: targetMouthOpen,
-          hasLandmarks: !!faceLandmarks
-        });
-      }
-      
-      // Clamp to valid range
+      // Clamp and smooth
       targetMouthOpen = Math.max(0, Math.min(1, targetMouthOpen));
-      
-      // Smooth interpolation to prevent glitches
-      // Use higher lerp factor (0.7) for more responsive mouth movement
       const smoothedMouthOpen = this.previousMouthOpen + (targetMouthOpen - this.previousMouthOpen) * 0.7;
       this.previousMouthOpen = smoothedMouthOpen;
       
-      // Apply to all possible mouth morph targets with extensive name variations
+      // Apply to morph targets
       const mouthMorphNames = [
         'jawOpen', 'mouthOpen', 'Mouth_Open', 'jawOpenY', 
-        'jawOpenX', 'Jaw_Open', 'mouthOpenY', 'MouthOpen',
-        'JawOpen', 'jaw_open', 'mouth_open', 'MouthOpenY',
-        'jawOpenZ', 'JawOpenY', 'Mouth_Open_Y', 'jawOpenVertical',
-        'jaw_open_y', 'Jaw_Open_Y', 'mouth_open_y'
+        'JawOpen', 'jaw_open', 'mouth_open', 'MouthOpen'
       ];
-      
-      let appliedToMorphs = false;
       
       if (this.morphTargetCache) {
         this.morphTargetCache.forEach((dictionary: any, child: any) => {
@@ -1159,25 +1248,21 @@ export class MotionCaptureService {
           mouthMorphNames.forEach(morphName => {
             const index = dictionary[morphName];
             if (index !== undefined && child.morphTargetInfluences) {
-              // Apply smoothed value to morph target
               child.morphTargetInfluences[index] = smoothedMouthOpen;
-              appliedToMorphs = true;
             }
           });
         });
       }
       
-      // FALLBACK: If no morph targets found, try jaw bone rotation
-      if (!appliedToMorphs && this.skeletonHelper && this.skeletonHelper.bones) {
-        // Try to find jaw bone
+      // Fallback to jaw bone rotation
+      if (this.skeletonHelper && this.skeletonHelper.bones) {
         const jawBone = this.skeletonHelper.bones.find((b: any) => 
-          b.name && (b.name.includes('Jaw') || b.name.includes('jaw') || b.name.includes('mixamorigHead'))
+          b.name && (b.name.includes('Jaw') || b.name.includes('jaw'))
         );
         
         if (jawBone) {
           const THREE = this.getTHREE();
-          // Rotate jaw down when mouth opens
-          const jawRotation = smoothedMouthOpen * 0.3; // Max 0.3 radians (~17 degrees)
+          const jawRotation = smoothedMouthOpen * 0.3;
           const euler = new THREE.Euler(jawRotation, 0, 0, 'XYZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
           jawBone.quaternion.slerp(quaternion, 0.7);

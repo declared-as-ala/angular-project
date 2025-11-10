@@ -6,6 +6,9 @@ declare const drawLandmarks: any;
 declare const POSE_CONNECTIONS: any;
 declare const HAND_CONNECTIONS: any;
 declare const FACEMESH_TESSELATION: any;
+declare const MediaPipeVision: any;
+declare const FilesetResolver: any;
+declare const FaceLandmarker: any;
 
 // Three.js addons module declarations
 declare module 'three/addons/controls/OrbitControls.js' {
