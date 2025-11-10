@@ -1104,27 +1104,41 @@ export class MotionCaptureService {
     
     // Apply eye blinking - improved with better detection and application
     if (riggedFace.eye) {
+      // Based on research and user feedback:
       // Kalidokit: 0 = open, 1 = closed
-      // For FBX morphs, we need to check if they're inverted (0 = closed, 1 = open)
-      // If eyes appear inverted, invert the values: 1 - eyeValue
+      // The FBX model appears to have inverted morph targets OR default state is wrong
+      // User reports: eyes start closed, open when user closes eyes
+      // This means: when Kalidokit = 0 (open), morph should be 0 (open)
+      //            when Kalidokit = 1 (closed), morph should be 1 (closed)
+      // But if eyes start closed, the morph default might be 1
+      // Solution: Use Kalidokit value directly (no inversion) and ensure we start at 0
       let leftBlink = 0;
       let rightBlink = 0;
       
       if (riggedFace.eye.l !== undefined) {
         // Kalidokit: 0 = open, 1 = closed
-        // FBX appears to be inverted: 0 = closed, 1 = open
-        // So we need to invert: when Kalidokit says 0 (open), FBX should be 1 (open)
-        // When Kalidokit says 1 (closed), FBX should be 0 (closed)
-        const rawValue = riggedFace.eye.l;
-        // First amplify, then invert
-        const amplified = Math.max(0, Math.min(1, rawValue * 1.5));
-        leftBlink = 1 - amplified;
+        // User reports: eyes start closed, open when user closes eyes
+        // This means the morph target is INVERTED:
+        //   When user eyes open (Kalidokit = 0) → Avatar should be open (morph = 0) but shows closed (morph = 1)
+        //   When user eyes closed (Kalidokit = 1) → Avatar should be closed (morph = 1) but shows open (morph = 0)
+        // Solution: INVERT the value: 1 - rawValue
+        const rawValue = riggedFace.eye.l; // 0-1 where 1 is closed
+        // Use much higher amplification to ensure full closure
+        // Also add a threshold to ensure even small blinks trigger full closure
+        const amplified = Math.max(0, Math.min(1, rawValue * 2.5)); // Increased from 1.5 to 2.5
+        // Apply curve to make it more aggressive - ensure full closure
+        const curved = Math.pow(amplified, 0.7); // Power curve for more aggressive closing
+        // Invert: when Kalidokit says 0 (open), send 1 to morph (which makes it open in inverted system)
+        //         when Kalidokit says 1 (closed), send 0 to morph (which makes it closed in inverted system)
+        leftBlink = 1 - curved;
       }
       
       if (riggedFace.eye.r !== undefined) {
         const rawValue = riggedFace.eye.r;
-        const amplified = Math.max(0, Math.min(1, rawValue * 1.5));
-        rightBlink = 1 - amplified;
+        // Same aggressive amplification and curve
+        const amplified = Math.max(0, Math.min(1, rawValue * 2.5)); // Increased from 1.5 to 2.5
+        const curved = Math.pow(amplified, 0.7); // Power curve for more aggressive closing
+        rightBlink = 1 - curved;
       }
       
       // Apply to eye morph targets with extensive name variations
@@ -1176,17 +1190,15 @@ export class MotionCaptureService {
         
         if (leftEyeBone) {
           const THREE = this.getTHREE();
-          // Invert for bone rotation too
-          const invertedBlink = 1 - leftBlink;
-          const euler = new THREE.Euler(invertedBlink * 0.5, 0, 0, 'XYZ');
+          // Use blink value directly (no inversion needed)
+          const euler = new THREE.Euler(leftBlink * 0.5, 0, 0, 'XYZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
           leftEyeBone.quaternion.slerp(quaternion, 0.8);
         }
         if (rightEyeBone) {
           const THREE = this.getTHREE();
-          // Invert for bone rotation too
-          const invertedBlink = 1 - rightBlink;
-          const euler = new THREE.Euler(invertedBlink * 0.5, 0, 0, 'XYZ');
+          // Use blink value directly (no inversion needed)
+          const euler = new THREE.Euler(rightBlink * 0.5, 0, 0, 'XYZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
           rightEyeBone.quaternion.slerp(quaternion, 0.8);
         }
