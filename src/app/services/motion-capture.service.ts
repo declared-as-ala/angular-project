@@ -1242,41 +1242,80 @@ export class MotionCaptureService {
       
       // If no morph targets found, try jaw bone rotation as fallback
       if (!jawOpenApplied && this.skeletonHelper && this.skeletonHelper.bones) {
-        // Try multiple bone name variations
-        const jawBoneNames = ['jaw', 'Jaw', 'chin', 'Chin', 'head', 'Head', 'mixamorigHead'];
+        // Try to find the actual JAW bone (not head bone)
+        // Priority: mixamorigJaw > jaw > chin (but NOT head)
+        const jawBoneNames = ['mixamorigJaw', 'Jaw', 'jaw', 'chin', 'Chin'];
         let jawBone: any = null;
         
         for (const boneName of jawBoneNames) {
           jawBone = this.skeletonHelper.bones.find((b: any) => 
-            b.name && b.name.toLowerCase().includes(boneName.toLowerCase())
+            b.name && 
+            b.name.toLowerCase().includes(boneName.toLowerCase()) &&
+            !b.name.toLowerCase().includes('head') // Exclude head bones
           );
           if (jawBone) break;
         }
         
         if (jawBone) {
           const THREE = this.getTHREE();
-          // More aggressive rotation for better visibility
-          const jawRotation = Math.min(0.6, jawOpenScore * 0.6); // Max 0.6 radians (~34 degrees)
-          const euler = new THREE.Euler(jawRotation, 0, 0, 'XYZ');
+          
+          // Store initial rotation if not already stored
+          if (!this.initRotation['Jaw']) {
+            this.initRotation['Jaw'] = {
+              x: jawBone.rotation.x,
+              y: jawBone.rotation.y,
+              z: jawBone.rotation.z
+            };
+            console.log(`Stored initial jaw rotation for "${jawBone.name}":`, this.initRotation['Jaw']);
+          }
+          
+          // Apply rotation relative to initial rotation (like SysMocap does)
+          // Rotate jaw DOWN (positive X rotation) when mouth opens
+          const jawRotationX = this.initRotation['Jaw'].x + (jawOpenScore * 0.8); // Max 0.8 radians (~46 degrees)
+          const euler = new THREE.Euler(
+            jawRotationX,
+            this.initRotation['Jaw'].y,
+            this.initRotation['Jaw'].z,
+            'XYZ'
+          );
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
-          jawBone.quaternion.slerp(quaternion, 0.9); // Higher lerp for more responsive
+          jawBone.quaternion.slerp(quaternion, 0.95); // Very high lerp for immediate response
           
           if (jawOpenScore > 0.3) {
-            console.log(`✅ Applied jawOpen via bone rotation on "${jawBone.name}":`, jawRotation, 'radians from score:', jawOpenScore);
+            console.log(`✅ Applied jawOpen via bone rotation on "${jawBone.name}":`, jawRotationX - this.initRotation['Jaw'].x, 'radians from score:', jawOpenScore);
           }
-          jawOpenApplied = true; // Mark as applied so we don't try fallback again
+          jawOpenApplied = true;
         } else {
-          // Log available bones for debugging
-          if (jawOpenScore > 0.3 && Math.random() < 0.1) {
-            const boneNames = this.skeletonHelper.bones.map((b: any) => b.name).filter((n: string) => n);
-            const headRelated = boneNames.filter((name: string) => 
-              name.toLowerCase().includes('head') || 
-              name.toLowerCase().includes('jaw') ||
-              name.toLowerCase().includes('chin') ||
-              name.toLowerCase().includes('face')
-            );
-            console.warn('⚠️ No jaw bone found. Head-related bones:', headRelated);
-            console.warn('All bones:', boneNames.slice(0, 20));
+          // If no jaw bone found, try head bone as last resort (but with different approach)
+          const headBone = this.skeletonHelper.bones.find((b: any) => 
+            b.name && (b.name === 'mixamorigHead' || b.name.toLowerCase().includes('head'))
+          );
+          
+          if (headBone) {
+            // Try to find a child bone that might be the jaw
+            // In some models, the jaw is a child of the head
+            const headBoneObj = headBone as any;
+            if (headBoneObj.children && headBoneObj.children.length > 0) {
+              for (const child of headBoneObj.children) {
+                if (child.name && (child.name.toLowerCase().includes('jaw') || child.name.toLowerCase().includes('chin'))) {
+                  jawBone = child;
+                  break;
+                }
+              }
+            }
+            
+            // If still no jaw, log all bones for debugging
+            if (!jawBone && jawOpenScore > 0.3 && Math.random() < 0.1) {
+              const boneNames = this.skeletonHelper.bones.map((b: any) => b.name).filter((n: string) => n);
+              const allBones = boneNames.join(', ');
+              console.warn('⚠️ No jaw bone found. All bones:', allBones);
+              
+              // Also check head bone children
+              if (headBoneObj.children) {
+                const childNames = headBoneObj.children.map((c: any) => c.name).filter((n: string) => n);
+                console.warn('Head bone children:', childNames);
+              }
+            }
           }
         }
       }
