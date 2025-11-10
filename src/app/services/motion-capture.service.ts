@@ -387,13 +387,31 @@ export class MotionCaptureService {
   private processLoadedModel(model: any): void {
     const THREE = this.getTHREE();
     
+    // Stop any ongoing tracking or animation
+    if (this.isTracking) {
+      this.stopTracking();
+    }
+    if (this.isAnimationPlaying) {
+      this.stopAnimation();
+    }
+    
     // Remove old model
     if (this.currentModel) {
       this.scene.remove(this.currentModel);
+      this.currentModel = null;
     }
     if (this.skeletonHelper) {
       this.scene.remove(this.skeletonHelper);
+      this.skeletonHelper = null;
     }
+
+    // Reset animation mixer
+    if (this.animationMixer) {
+      this.animationMixer = null;
+    }
+
+    // Reset initial rotations
+    this.initRotation = {};
 
     // Scale and position model
     const box = new THREE.Box3().setFromObject(model);
@@ -416,11 +434,20 @@ export class MotionCaptureService {
     this.scene.add(model);
     this.currentModel = model;
 
+    // Create new skeleton helper for the new model
     this.skeletonHelper = new THREE.SkeletonHelper(model);
     this.skeletonHelper.visible = false;
     this.scene.add(this.skeletonHelper);
 
+    // Store initial rotations for the new model
     this.storeInitialRotations();
+    
+    // Initialize animation mixer for the new model
+    if (this.currentModel) {
+      this.animationMixer = new THREE.AnimationMixer(this.currentModel);
+    }
+    
+    console.log('Model loaded and skeleton initialized. Bones found:', this.skeletonHelper.bones?.length || 0);
 
     // Extract animations
     let modelAnimations: any[] = [];
@@ -453,20 +480,22 @@ export class MotionCaptureService {
       newCenter.y + newSize.y * 0.3,
       newCenter.z + distance
     );
-    this.controls.target.copy(newCenter);
-    this.controls.minDistance = newMaxDim * 0.5;
-    this.controls.maxDistance = newMaxDim * 10;
-    this.controls.update();
-
-    // Initialize animation mixer
-    if (this.currentModel) {
-      this.animationMixer = new THREE.AnimationMixer(this.currentModel);
+    if (this.controls) {
+      this.controls.target.copy(newCenter);
+      this.controls.minDistance = newMaxDim * 0.5;
+      this.controls.maxDistance = newMaxDim * 10;
+      this.controls.update();
     }
   }
 
   private storeInitialRotations(): void {
     this.initRotation = {};
-    if (!this.skeletonHelper || !this.skeletonHelper.bones) return;
+    if (!this.skeletonHelper || !this.skeletonHelper.bones) {
+      console.warn('SkeletonHelper or bones not available');
+      return;
+    }
+
+    console.log('Storing initial rotations. Available bones:', this.skeletonHelper.bones.map((b: any) => b.name));
 
     Object.keys(this.mixamoBoneMapping).forEach(boneName => {
       const mapping = this.mixamoBoneMapping[boneName as keyof typeof this.mixamoBoneMapping];
@@ -477,8 +506,13 @@ export class MotionCaptureService {
           y: bone.rotation.y,
           z: bone.rotation.z
         };
+        console.log(`Stored initial rotation for ${boneName} (${mapping.name})`);
+      } else {
+        console.warn(`Bone not found: ${mapping.name} for ${boneName}`);
       }
     });
+    
+    console.log('Initial rotations stored:', Object.keys(this.initRotation).length, 'bones');
   }
 
   async startTracking(video: HTMLVideoElement, canvas: HTMLCanvasElement): Promise<void> {
@@ -725,14 +759,29 @@ export class MotionCaptureService {
   }
 
   private rigRotation(name: string, rotation: any = { x: 0, y: 0, z: 0 }, dampener = 1, lerpAmount = 0.3): void {
-    if (!this.skeletonHelper || !this.skeletonHelper.bones) return;
+    if (!this.skeletonHelper || !this.skeletonHelper.bones) {
+      // Silently return if skeleton not ready
+      return;
+    }
     const THREE = this.getTHREE();
 
     const mapping = this.mixamoBoneMapping[name as keyof typeof this.mixamoBoneMapping];
     if (!mapping) return;
 
     const bone = this.skeletonHelper.bones.find((b: any) => b.name === mapping.name);
-    if (!bone) return;
+    if (!bone) {
+      // Silently return if bone not found (model might not have this bone)
+      return;
+    }
+    
+    // Ensure initial rotation is stored
+    if (!this.initRotation[name]) {
+      this.initRotation[name] = {
+        x: bone.rotation.x,
+        y: bone.rotation.y,
+        z: bone.rotation.z
+      };
+    }
 
     if (!this.initRotation[name]) {
       this.initRotation[name] = {
